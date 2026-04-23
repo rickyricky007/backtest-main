@@ -3,6 +3,13 @@
 A Streamlit-based trading dashboard integrating Zerodha Kite API, 
 Yahoo Finance, paper trading, and strategy backtesting.
 
+## 🔧 Current Work
+- **Active Strategy:** SMA Crossover (Strategy #2)
+- **Files to create:** sma_strategy.py, pages/10_SMA_Strategy.py
+- **Last updated:** April 2026
+
+---
+
 ## 🚀 Features
 - Live indices dashboard (Nifty 50, Bank Nifty, Sensex)
 - Holdings and positions overview
