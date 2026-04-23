@@ -21,3 +21,7 @@ dashboard.sqlite
 
 # VS Code
 .vscode/
+
+fo_paper_trading.log
+fo_paper_portfolio.json
+fo_paper_trades.json
