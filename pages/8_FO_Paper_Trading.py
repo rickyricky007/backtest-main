@@ -1,20 +1,38 @@
-"""F&O Paper Trading — simulate options/futures trading with real Kite prices."""
+"""F&O Paper Trading — simulate options/futures trading with real Kite prices.
+
+WHY THIS FILE EXISTS:
+    Lets you practice F&O trading using REAL live prices from Kite,
+    but with fake money — so you can learn without losing real capital.
+    Tracks your paper positions, P&L, and trade history in JSON files.
+"""
 
 from __future__ import annotations
 
-import json
-import time
 import calendar
+import json
+import logging
 from datetime import datetime, date, timedelta
+from pathlib import Path
 
 import pandas as pd
+import yfinance as yf
 import streamlit as st
 
 import kite_data as kd
 import auth_streamlit as auth
-import local_store as store
-import alert_engine as ae
 
+# ── Logging setup ──────────────────────────────────────────────────────────
+# WHY: Instead of silent failures, we log errors to a file so you can debug
+# problems even after they happen. Check fo_paper_trading.log if something
+# goes wrong and you're not sure why.
+logging.basicConfig(
+    filename="fo_paper_trading.log",
+    level=logging.ERROR,
+    format="%(asctime)s | %(levelname)s | %(message)s",
+)
+logger = logging.getLogger(__name__)
+
+# ── Page config ────────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="F&O Paper Trading",
     page_icon="📊",
@@ -27,17 +45,30 @@ auth.render_auth_cleared_banner()
 # ── Constants ──────────────────────────────────────────────────────────────
 
 INDICES = {
-    "NIFTY":      {"lot": 50,  "symbol": "NIFTY 50",          "exchange": "NFO"},
-    "BANKNIFTY":  {"lot": 15,  "symbol": "NIFTY BANK",        "exchange": "NFO"},
-    "FINNIFTY":   {"lot": 40,  "symbol": "NIFTY FIN SERVICE", "exchange": "NFO"},
-    "MIDCPNIFTY": {"lot": 75,  "symbol": "NIFTY MID SELECT",  "exchange": "NFO"},
-    "SENSEX":     {"lot": 10,  "symbol": "SENSEX",            "exchange": "BFO"},
+    "NIFTY":      {"lot": 50,  "exchange": "NFO"},
+    "BANKNIFTY":  {"lot": 15,  "exchange": "NFO"},
+    "FINNIFTY":   {"lot": 40,  "exchange": "NFO"},
+    "MIDCPNIFTY": {"lot": 75,  "exchange": "NFO"},
+    "SENSEX":     {"lot": 10,  "exchange": "BFO"},
 }
 
-# Spot exchange for each index (for live price fetch)
-INDEX_SPOT_EXCHANGE = {
-    "NIFTY": "NSE", "BANKNIFTY": "NSE", "FINNIFTY": "NSE",
-    "MIDCPNIFTY": "NSE", "SENSEX": "BSE",
+# WHY: Kite uses different symbol names for indices than what you see on screen.
+# For example, to get the NIFTY 50 price, Kite wants "NSE:NIFTY 50" not "NSE:NIFTY".
+INDEX_SPOT_MAP = {
+    "NIFTY":      ("NIFTY 50",          "NSE"),
+    "BANKNIFTY":  ("NIFTY BANK",        "NSE"),
+    "FINNIFTY":   ("NIFTY FIN SERVICE", "NSE"),
+    "MIDCPNIFTY": ("NIFTY MID SELECT",  "NSE"),
+    "SENSEX":     ("SENSEX",            "BSE"),
+}
+
+# WHY: yfinance uses Yahoo Finance tickers — needed as a fallback when Kite is down.
+INDEX_YFINANCE_MAP = {
+    "NIFTY":      "^NSEI",
+    "BANKNIFTY":  "^NSEBANK",
+    "FINNIFTY":   "NIFTY_FIN_SERVICE.NS",
+    "MIDCPNIFTY": "^NSMIDCP",
+    "SENSEX":     "^BSESN",
 }
 
 FO_STOCKS = [
@@ -61,6 +92,8 @@ FO_STOCKS = [
     "TVSMOTOR","UNIONBANK","VEDL","VOLTAS","ZYDUSLIFE",
 ]
 
+# WHY: F&O lot sizes are fixed by NSE — you can't trade partial lots.
+# Each stock has a minimum contract size. Wrong lot size = wrong P&L calculations.
 FO_STOCKS_LOT = {s: 500 for s in FO_STOCKS}
 FO_STOCKS_LOT.update({
     "MRF": 10, "PAGEIND": 15, "BOSCHLTD": 25, "EICHERMOT": 50,
@@ -68,110 +101,254 @@ FO_STOCKS_LOT.update({
     "TCS": 150, "INFY": 300, "HDFCBANK": 550, "ICICIBANK": 700,
 })
 
-# ── Storage (SQLite) ───────────────────────────────────────────────────────
+# ── Storage ────────────────────────────────────────────────────────────────
+FO_TRADES_FILE    = Path("fo_paper_trades.json")
+FO_PORTFOLIO_FILE = Path("fo_paper_portfolio.json")
+STARTING_CAPITAL  = 500_000.0  # ₹5,00,000
 
-STARTING_CAPITAL = 500_000.0  # ₹5,00,000
 
+# ══════════════════════════════════════════════════════════════════════════
+# SAFE FILE I/O
+# WHY: JSON files can get corrupted if the app crashes mid-write (power cut,
+# force-quit, disk full). These functions safely handle that instead of crashing
+# with a confusing Python error.
+# ══════════════════════════════════════════════════════════════════════════
 
 def load_fo_trades() -> list:
-    return store.load_fo_trades()
+    """Load trade history. Returns empty list if file is missing or corrupted."""
+    if not FO_TRADES_FILE.exists():
+        return []
+    try:
+        return json.loads(FO_TRADES_FILE.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as e:
+        logger.error(f"Could not read trades file: {e}")
+        st.warning("⚠️ Trade history file seems corrupted. Starting fresh.")
+        return []
 
 
 def save_fo_trades(trades: list) -> None:
-    pass  # individual inserts happen via store.append_fo_trade() in place_fo_order()
+    """Save trade history. Shows error if disk write fails."""
+    try:
+        FO_TRADES_FILE.write_text(json.dumps(trades, indent=2), encoding="utf-8")
+    except OSError as e:
+        logger.error(f"Could not save trades: {e}")
+        st.error("❌ Could not save trade history. Check if disk has space.")
 
 
 def load_fo_portfolio() -> dict:
-    return store.load_fo_portfolio(starting_capital=STARTING_CAPITAL)
+    """Load portfolio. Returns fresh portfolio if file is missing or corrupted."""
+    if not FO_PORTFOLIO_FILE.exists():
+        return {"cash": STARTING_CAPITAL, "positions": {}}
+    try:
+        data = json.loads(FO_PORTFOLIO_FILE.read_text(encoding="utf-8"))
+        # WHY: Validate keys exist — file could be from an older version of the app
+        if "cash" not in data or "positions" not in data:
+            raise ValueError("Portfolio file is missing required keys")
+        return data
+    except (json.JSONDecodeError, ValueError, OSError) as e:
+        logger.error(f"Could not read portfolio file: {e}")
+        st.warning("⚠️ Portfolio file seems corrupted. Starting with a fresh portfolio.")
+        return {"cash": STARTING_CAPITAL, "positions": {}}
 
 
 def save_fo_portfolio(portfolio: dict) -> None:
-    store.save_fo_portfolio(portfolio)
+    """Save portfolio. Shows error if disk write fails."""
+    try:
+        FO_PORTFOLIO_FILE.write_text(json.dumps(portfolio, indent=2), encoding="utf-8")
+    except OSError as e:
+        logger.error(f"Could not save portfolio: {e}")
+        st.error("❌ Could not save portfolio. Check if disk has space.")
 
 
-# ── Expiry Helpers ─────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════
+# EXPIRY HELPERS
+# ══════════════════════════════════════════════════════════════════════════
 
 def get_weekly_expiries(n: int = 5) -> list[str]:
-    """Get next N weekly expiries (Thursdays)."""
-    expiries = []
-    today = date.today()
-    d = today
+    """Get next N weekly expiries. In India, F&O expires every Thursday."""
+    expiries, d = [], date.today()
     while len(expiries) < n:
-        if d.weekday() == 3:  # Thursday
+        if d.weekday() == 3:  # 3 = Thursday
             expiries.append(d.strftime("%d %b %Y"))
         d += timedelta(days=1)
     return expiries
 
 
 def get_monthly_expiries(n: int = 3) -> list[str]:
-    """Get next N monthly expiries (last Thursday of month)."""
+    """Get next N monthly expiries (last Thursday of each month)."""
     expiries = []
     today = date.today()
     year, month = today.year, today.month
-    for _ in range(n + 2):
+    for _ in range(n + 3):
         if month > 12:
-            month = 1
-            year += 1
+            month, year = 1, year + 1
         cal = calendar.monthcalendar(year, month)
         thursdays = [week[3] for week in cal if week[3] != 0]
-        last_thursday = date(year, month, thursdays[-1])
-        if last_thursday >= today:
-            expiries.append(last_thursday.strftime("%d %b %Y"))
+        last_thu = date(year, month, thursdays[-1])
+        if last_thu >= today:
+            expiries.append(last_thu.strftime("%d %b %Y"))
         month += 1
         if len(expiries) >= n:
             break
     return expiries
 
 
-def get_strike_range(spot_price: float, step: int = 50, count: int = 20) -> list[int]:
-    """Generate strike prices around spot."""
+def get_strike_range(spot_price: float, step: int = 50, count: int = 30) -> list[int]:
+    """Generate strike prices centered around the current spot price."""
     atm = round(spot_price / step) * step
-    strikes = [atm + (i - count // 2) * step for i in range(count)]
-    return sorted(strikes)
+    return sorted([atm + (i - count // 2) * step for i in range(count)])
 
 
-def get_live_price(symbol: str, exchange: str = "NSE") -> float | None:
+def days_to_expiry(expiry_str: str) -> int:
+    """How many calendar days until this option expires."""
     try:
-        quote = kd.kite_client().quote(f"{exchange}:{symbol}")
-        return quote[f"{exchange}:{symbol}"]["last_price"]
-    except Exception:
-        return None
+        exp = datetime.strptime(expiry_str, "%d %b %Y").date()
+        return (exp - date.today()).days
+    except ValueError:
+        return 999  # unknown expiry — assume far away
 
 
-def get_option_price(underlying: str, expiry_str: str, strike: int, opt_type: str) -> float | None:
-    """Fetch live option price from Kite.
+# ══════════════════════════════════════════════════════════════════════════
+# PRICE FETCHING WITH SMART FALLBACKS
+#
+# WHY we have 3 layers of handling:
+#   1. Kite API (real-time, best)     → try this first
+#   2. yfinance fallback (15-min delay) → if Kite fails for non-auth reasons
+#   3. Manual entry                   → if both fail
+#
+# WHY we distinguish AUTH errors from other errors:
+#   - Auth error = token expired → user MUST re-login, no point trying yfinance
+#   - Other errors = API down, bad symbol, network issue → yfinance might work
+# ══════════════════════════════════════════════════════════════════════════
 
-    Kite uses two symbol formats:
-      Monthly expiry  →  NIFTY25APR24500CE
-      Weekly expiry   →  NIFTY2541724500CE  (YY + single month code + DD)
+def get_live_price(symbol: str, exchange: str = "NSE") -> tuple[float | None, str]:
+    """
+    Fetch live spot price from Kite. Falls back to yfinance if Kite is unavailable.
+
+    Returns:
+        (price, source) — source is "kite", "yfinance", "auth_error", or "unavailable"
+    """
+    kite_key = f"{exchange}:{symbol}"
+    try:
+        quote = kd.kite_client().quote(kite_key)
+        price = quote[kite_key]["last_price"]
+        if price and price > 0:
+            return price, "kite"
+        # WHY: Kite sometimes returns 0 for illiquid/halted symbols — not useful
+        raise ValueError(f"Kite returned zero/null price for {kite_key}")
+
+    except Exception as e:
+        if kd.is_kite_auth_error(e):
+            # WHY: Token expired — yfinance won't help, user needs to re-login
+            logger.error(f"Kite auth error for {kite_key}: {e}")
+            return None, "auth_error"
+
+        logger.error(f"Kite spot fetch failed ({kite_key}): {e}")
+
+        # ── yfinance fallback ──────────────────────────────────────────────
+        # WHY: Find matching yfinance ticker — only works for indices + NSE stocks
+        yf_ticker = None
+        for idx_name, (spot_sym, spot_exch) in INDEX_SPOT_MAP.items():
+            if spot_sym == symbol and spot_exch == exchange:
+                yf_ticker = INDEX_YFINANCE_MAP.get(idx_name)
+                break
+        if yf_ticker is None and exchange == "NSE":
+            yf_ticker = f"{symbol}.NS"  # NSE stock format for Yahoo Finance
+
+        if yf_ticker:
+            try:
+                hist = yf.Ticker(yf_ticker).history(period="2d")
+                if not hist.empty:
+                    return float(hist["Close"].iloc[-1]), "yfinance"
+            except Exception as yf_err:
+                logger.error(f"yfinance fallback failed ({yf_ticker}): {yf_err}")
+
+        return None, "unavailable"
+
+
+def get_option_price(
+    underlying: str, expiry_str: str, strike: int, opt_type: str
+) -> tuple[float | None, str]:
+    """
+    Fetch live option premium from Kite NFO.
+
+    WHY the symbol format is tricky:
+        Kite NFO symbols look like: NIFTY24APR24000CE
+        - NIFTY  = underlying name
+        - 24APR  = YY + first 3 letters of month in UPPERCASE (e.g. APR, MAY, JUN)
+        - 24000  = strike price (no decimals)
+        - CE/PE  = Call or Put
+        If ANY part is wrong, Kite returns "No instrument found" error.
+
+    Returns:
+        (price, source) — source is "kite", "auth_error", "bad_symbol",
+                          "zero_price", or "unavailable"
     """
     try:
-        exchange = INDICES.get(underlying, {}).get("exchange", "NFO")
         dt = datetime.strptime(expiry_str, "%d %b %Y")
+        # WHY: [:5] trims to exactly "YYMMM" e.g. "24APR" — Kite is very strict
+        exp_fmt    = dt.strftime("%y%b").upper()[:5]
+        nfo_symbol = f"{underlying}{exp_fmt}{strike}{opt_type}"
+        kite_key   = f"NFO:{nfo_symbol}"
 
-        # Check if this expiry is the last Thursday of the month (monthly) or not (weekly)
-        cal = calendar.monthcalendar(dt.year, dt.month)
-        thursdays = [week[3] for week in cal if week[3] != 0]
-        last_thu = date(dt.year, dt.month, thursdays[-1])
+        quote = kd.kite_client().quote(kite_key)
+        price = quote[kite_key]["last_price"]
 
-        if dt.date() == last_thu:
-            # Monthly format — e.g. 25APR
-            exp_fmt = dt.strftime("%y%b").upper()
-        else:
-            # Weekly format — Kite uses single char for Oct=O, Nov=N, Dec=D
-            month_code = {
-                1: "1", 2: "2", 3: "3", 4: "4",
-                5: "5", 6: "6", 7: "7", 8: "8",
-                9: "9", 10: "O", 11: "N", 12: "D",
-            }
-            exp_fmt = dt.strftime("%y") + month_code[dt.month] + dt.strftime("%d")
+        if price and price > 0:
+            return price, "kite"
+        # WHY: Zero price = option not yet traded today or deeply OTM with no buyers
+        return None, "zero_price"
 
-        symbol = f"{underlying}{exp_fmt}{strike}{opt_type}"
-        quote = kd.kite_client().quote(f"{exchange}:{symbol}")
-        return quote[f"{exchange}:{symbol}"]["last_price"]
-    except Exception:
+    except Exception as e:
+        if kd.is_kite_auth_error(e):
+            logger.error(f"Kite auth error fetching option: {e}")
+            return None, "auth_error"
+
+        err_lower = str(e).lower()
+        # WHY: "No instrument" = wrong symbol format or that contract doesn't exist in NFO
+        if "no instrument" in err_lower or "invalid" in err_lower:
+            logger.warning(
+                f"Option symbol not found in NFO: "
+                f"{underlying} {expiry_str} {strike} {opt_type}"
+            )
+            return None, "bad_symbol"
+
+        logger.error(
+            f"Option price fetch failed "
+            f"({underlying} {strike} {opt_type} {expiry_str}): {e}"
+        )
+        return None, "unavailable"
+
+
+def render_price_badge(price: float | None, source: str, label: str = "Price") -> float | None:
+    """
+    Show a colored status badge explaining where the price came from.
+    WHY: You should always know if you're looking at real-time or delayed data.
+    Returns the price if valid, None if not usable.
+    """
+    if price and source == "kite":
+        st.success(f"📡 **{label}:** ₹ {price:,.2f}  *(Live — Kite)*")
+        return price
+    elif price and source == "yfinance":
+        st.warning(f"⏱️ **{label}:** ₹ {price:,.2f}  *(~15 min delayed — Yahoo Finance fallback)*")
+        return price
+    elif source == "auth_error":
+        st.error("🔐 **Kite session expired.** Please re-login using the sidebar → *Kite session (sign in / renew)*.")
+        return None
+    elif source == "bad_symbol":
+        st.warning("⚠️ This option contract was **not found in NFO**. Enter the premium manually below.")
+        return None
+    elif source == "zero_price":
+        st.warning("⚠️ Option returned ₹ 0 — it may not have traded yet today. Enter manually.")
+        return None
+    else:
+        st.warning(f"⚠️ **{label}** could not be fetched (Kite + Yahoo both failed). Enter manually.")
         return None
 
+
+# ══════════════════════════════════════════════════════════════════════════
+# ORDER PLACEMENT WITH FULL VALIDATION
+# ══════════════════════════════════════════════════════════════════════════
 
 def place_fo_order(
     instrument_type: str,
@@ -184,169 +361,166 @@ def place_fo_order(
     price: float,
     lot_size: int,
 ) -> dict:
-    portfolio = load_fo_portfolio()
+    """
+    Place a paper F&O order. Validates everything before touching the portfolio.
 
-    qty = lots * lot_size
-    total_value = price * qty
+    WHY we validate so much:
+        - price ≤ 0   → something went wrong fetching price, don't trade on bad data
+        - lots ≤ 0    → would silently corrupt portfolio math
+        - expired     → trading expired options produces meaningless P&L
+        - sell > held → would create negative positions which break P&L calculations
+    """
+
+    # ── Validation ─────────────────────────────────────────────────────────
+    if price <= 0:
+        return {"error": f"Invalid price ₹{price:.2f}. Price must be greater than zero."}
+    if lots <= 0:
+        return {"error": "Number of lots must be at least 1."}
+    if lot_size <= 0:
+        return {"error": f"Invalid lot size: {lot_size}. This is a data error, please report it."}
+
+    # WHY: Trading an already-expired option is meaningless and would show wrong P&L
+    dte = days_to_expiry(expiry)
+    if dte < 0:
+        return {"error": f"This option expired **{abs(dte)} day(s) ago**. Please select a valid expiry date."}
+
+    portfolio    = load_fo_portfolio()
+    trades       = load_fo_trades()
+    qty          = lots * lot_size
+    total_value  = price * qty
     position_key = f"{underlying}_{expiry}_{strike}_{opt_type}"
 
     if action == "BUY":
+        # WHY: Can't buy what you can't afford — prevent portfolio going negative
         if portfolio["cash"] < total_value:
-            return {"error": f"Insufficient funds! Need ₹{total_value:,.2f}, have ₹{portfolio['cash']:,.2f}"}
+            shortfall = total_value - portfolio["cash"]
+            return {
+                "error": (
+                    f"Insufficient funds!\n\n"
+                    f"**Need:** ₹{total_value:,.2f}  |  "
+                    f"**Have:** ₹{portfolio['cash']:,.2f}  |  "
+                    f"**Short by:** ₹{shortfall:,.2f}"
+                )
+            }
         portfolio["cash"] -= total_value
         positions = portfolio["positions"]
+
         if position_key in positions:
+            # WHY: Correct average price formula when adding to an existing position
             existing = positions[position_key]
             new_lots = existing["lots"] + lots
-            new_avg = ((existing["avg_price"] * existing["lots"]) + (price * lots)) / new_lots
-            positions[position_key].update({"lots": new_lots, "avg_price": new_avg})
+            new_avg  = (
+                (existing["avg_price"] * existing["lots"]) + (price * lots)
+            ) / new_lots
+            positions[position_key].update({
+                "lots":      new_lots,
+                "avg_price": round(new_avg, 4),
+            })
         else:
             positions[position_key] = {
-                "underlying": underlying,
-                "expiry": expiry,
-                "strike": strike,
-                "opt_type": opt_type,
-                "lots": lots,
-                "lot_size": lot_size,
-                "avg_price": price,
+                "underlying":      underlying,
+                "expiry":          expiry,
+                "strike":          strike,
+                "opt_type":        opt_type,
+                "lots":            lots,
+                "lot_size":        lot_size,
+                "avg_price":       price,
                 "instrument_type": instrument_type,
+                "entry_time":      datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             }
 
     elif action == "SELL":
         positions = portfolio["positions"]
-        if position_key not in positions or positions[position_key]["lots"] < lots:
-            held = positions.get(position_key, {}).get("lots", 0)
-            return {"error": f"Insufficient position! You hold {held} lots of {underlying} {strike} {opt_type}"}
+        held_lots = positions.get(position_key, {}).get("lots", 0)
+
+        # WHY: Can't sell more than you hold — prevents negative lot counts
+        if position_key not in positions or held_lots < lots:
+            return {
+                "error": (
+                    f"Cannot sell **{lots} lot(s)** — you only hold "
+                    f"**{held_lots} lot(s)** of {underlying} {strike} {opt_type}."
+                )
+            }
         portfolio["cash"] += total_value
         positions[position_key]["lots"] -= lots
         if positions[position_key]["lots"] == 0:
-            del positions[position_key]
+            del positions[position_key]  # WHY: Remove fully closed positions
 
-    # Save portfolio atomically to SQLite
-    save_fo_portfolio(portfolio)
-
-    # Append trade record to SQLite (crash-safe)
-    store.append_fo_trade({
-        "action":     action,
-        "underlying": underlying,
-        "symbol":     f"{underlying}_{strike}_{opt_type}",
-        "expiry":     expiry,
-        "strike":     strike,
-        "opt_type":   opt_type,
-        "lots":       lots,
-        "lot_size":   lot_size,
-        "qty":        qty,
-        "price":      price,
-        "premium":    total_value,
-        "trade_type": "paper",
-        "traded_at":  datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-    })
+    else:
+        return {"error": f"Unknown action '{action}'. Must be BUY or SELL."}
 
     trade = {
-        "action": action, "underlying": underlying, "expiry": expiry,
-        "strike": strike, "opt_type": opt_type, "lots": lots,
-        "lot_size": lot_size, "qty": qty, "price": price, "total": total_value,
+        "id":              len(trades) + 1,
+        "timestamp":       datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "instrument_type": instrument_type,
+        "underlying":      underlying,
+        "expiry":          expiry,
+        "strike":          strike,
+        "opt_type":        opt_type,
+        "action":          action,
+        "lots":            lots,
+        "lot_size":        lot_size,
+        "qty":             qty,
+        "price":           price,
+        "total":           total_value,
     }
+    trades.append(trade)
+    save_fo_trades(trades)
+    save_fo_portfolio(portfolio)
     return {"success": trade}
 
 
-# ── Alert Engine ───────────────────────────────────────────────────────────
-
-def get_current_pnl() -> float:
-    """Calculate total unrealized P&L across all open positions."""
-    portfolio = load_fo_portfolio()
-    positions = portfolio["positions"]
-    total_pnl = 0.0
-    for key, pos in positions.items():
-        current_price = get_option_price(
-            pos["underlying"], pos["expiry"], pos["strike"], pos["opt_type"]
-        ) or pos["avg_price"]
-        qty = pos["lots"] * pos["lot_size"]
-        total_pnl += (current_price - pos["avg_price"]) * qty
-    return total_pnl
-
-
-def run_alert_checks() -> None:
-    """Check all active alerts and send Telegram if any condition is met."""
-    token = store.get_setting("telegram_token")
-    chat_id = store.get_setting("telegram_chat_id")
-    if not token or not chat_id:
-        return  # Telegram not configured yet
-
-    active_alerts = store.load_active_alerts()
-    if not active_alerts:
-        return
-
-    triggered_ids = []
-
-    for alert in active_alerts:
-        try:
-            if alert["alert_type"] == "PRICE":
-                current_price = get_live_price(alert["symbol"], alert["exchange"])
-                if current_price and ae.check_condition(current_price, alert["condition"], alert["target_value"]):
-                    msg = ae.format_price_alert_message(
-                        alert["display_name"], alert["condition"],
-                        alert["target_value"], current_price,
-                    )
-                    ae.send_telegram_message(token, chat_id, msg)
-                    triggered_ids.append(alert["id"])
-
-            elif alert["alert_type"] == "PNL":
-                current_pnl = get_current_pnl()
-                if ae.check_condition(current_pnl, alert["condition"], alert["target_value"]):
-                    msg = ae.format_pnl_alert_message(
-                        alert["condition"], alert["target_value"], current_pnl,
-                    )
-                    ae.send_telegram_message(token, chat_id, msg)
-                    triggered_ids.append(alert["id"])
-        except Exception:
-            continue
-
-    for alert_id in triggered_ids:
-        store.mark_alert_triggered(alert_id)
-
-
-# ── Sidebar ────────────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════
+# SIDEBAR
+# ══════════════════════════════════════════════════════════════════════════
 with st.sidebar:
     st.subheader("💰 F&O Portfolio")
-    portfolio = load_fo_portfolio()
-    st.metric("Available Capital", f"₹ {portfolio['cash']:,.2f}")
+    _p = load_fo_portfolio()
+    st.metric("Available Capital", f"₹ {_p['cash']:,.2f}")
+    st.caption(f"Open positions: **{len(_p.get('positions', {}))}**")
     st.divider()
 
+    # WHY: Confirm before reset — prevents accidental wipe of all paper trades
     if st.button("🔄 Reset F&O Portfolio", use_container_width=True):
-        store.reset_fo_portfolio(starting_capital=STARTING_CAPITAL)
-        store.clear_fo_trades()
-        st.success(f"Reset to ₹{STARTING_CAPITAL:,.0f}!")
-        st.rerun()
+        st.session_state["confirm_reset_fo"] = True
 
-    auto_refresh = st.toggle("Auto Refresh (5s)", value=False)
-    if auto_refresh:
-        st.caption("⚡ Auto refreshing every 5s")
-        time.sleep(5)
-        st.rerun()
+    if st.session_state.get("confirm_reset_fo"):
+        st.warning("⚠️ This will delete ALL paper trades and reset capital!")
+        cy, cn = st.columns(2)
+        with cy:
+            if st.button("✅ Yes, Reset", use_container_width=True, key="reset_yes"):
+                save_fo_portfolio({"cash": STARTING_CAPITAL, "positions": {}})
+                save_fo_trades([])
+                st.session_state.pop("confirm_reset_fo", None)
+                st.success(f"Reset to ₹{STARTING_CAPITAL:,.0f}!")
+                st.rerun()
+        with cn:
+            if st.button("❌ Cancel", use_container_width=True, key="reset_no"):
+                st.session_state.pop("confirm_reset_fo", None)
+                st.rerun()
 
     auth.render_sidebar_kite_session(key_prefix="fo")
     auth.render_logout_controls(key="kite_logout_fo")
 
+# WHY: Stop here if not logged in — everything below needs Kite access
 if not auth.ensure_kite_ready():
     st.stop()
 
-# Run alert checks on every page load
-run_alert_checks()
-
 # ── Header ─────────────────────────────────────────────────────────────────
 st.title("📊 F&O Paper Trading")
-st.caption(f"Simulate Index & Stock Options trading. Starting capital: ₹{STARTING_CAPITAL:,.0f}")
+st.caption(f"Simulate Index & Stock Options with real Kite prices. Starting capital: ₹{STARTING_CAPITAL:,.0f}")
 
-# ── Tabs ───────────────────────────────────────────────────────────────────
-tab1, tab2, tab3, tab4, tab5 = st.tabs([
+tab1, tab2, tab3, tab4 = st.tabs([
     "📈 Place Order",
     "💼 Open Positions",
     "📋 Trade History",
     "📊 P&L Summary",
-    "🔔 Alerts",
 ])
 
+
+# ══════════════════════════════════════════════════════════════════════════
+# TAB 1 — PLACE ORDER
+# ══════════════════════════════════════════════════════════════════════════
 with tab1:
     st.subheader("Place F&O Order")
 
@@ -357,64 +531,96 @@ with tab1:
     with col1:
         if inst_type == "Index Options":
             underlying = st.selectbox("Select Index", list(INDICES.keys()))
-            lot_size = INDICES[underlying]["lot"]
+            lot_size   = INDICES[underlying]["lot"]
             st.caption(f"Lot size: **{lot_size}**")
-
-            spot_exchange = INDEX_SPOT_EXCHANGE[underlying]
-            spot_price = get_live_price(INDICES[underlying]["symbol"], spot_exchange) or 24000.0
+            spot_sym, spot_exch = INDEX_SPOT_MAP[underlying]
+            spot_price, spot_src = get_live_price(spot_sym, spot_exch)
         else:
             underlying = st.selectbox("Select Stock", FO_STOCKS)
-            lot_size = FO_STOCKS_LOT.get(underlying, 500)
+            lot_size   = FO_STOCKS_LOT.get(underlying, 500)
             st.caption(f"Lot size: **{lot_size}**")
-            spot_price = get_live_price(underlying, "NSE") or 1000.0
+            spot_price, spot_src = get_live_price(underlying, "NSE")
 
-        if spot_price:
-            st.success(f"📡 Spot Price: ₹ {spot_price:,.2f}")
+        displayed_spot = render_price_badge(spot_price, spot_src, label="Spot Price")
+
+        if displayed_spot is None:
+            if spot_src == "auth_error":
+                st.stop()  # No point continuing without auth
+            # WHY: Use a safe fallback so strike slider doesn't crash
+            spot_price = 24000.0 if inst_type == "Index Options" else 1000.0
+            st.info(f"ℹ️ Using ₹{spot_price:,.0f} as placeholder for strike range only.")
+        else:
+            spot_price = displayed_spot
 
     with col2:
         expiry_type = st.radio("Expiry Type", ["Weekly", "Monthly"], horizontal=True)
-        if expiry_type == "Weekly":
-            expiries = get_weekly_expiries(5)
-        else:
-            expiries = get_monthly_expiries(3)
-        expiry = st.selectbox("Select Expiry", expiries)
-        opt_type = st.radio("Option Type", ["CE", "PE"], horizontal=True)
+        expiries    = get_weekly_expiries(5) if expiry_type == "Weekly" else get_monthly_expiries(3)
+        expiry      = st.selectbox("Select Expiry", expiries)
+        opt_type    = st.radio("Option Type", ["CE", "PE"], horizontal=True)
 
-    # SENSEX uses 100-point strike steps, not 50
-    step = 100 if underlying in ["BANKNIFTY", "SENSEX"] else 50
+        # WHY: Theta (time decay) is fastest in last 1-2 days before expiry
+        dte = days_to_expiry(expiry)
+        if dte == 0:
+            st.error("🚨 Expiry is **TODAY** — extreme time decay, trade carefully!")
+        elif dte <= 2:
+            st.warning(f"⚠️ Only **{dte} day(s)** to expiry — high time decay risk!")
+
+    # ── Strike price slider ────────────────────────────────────────────────
+    step    = 50 if underlying in ["NIFTY", "FINNIFTY", "MIDCPNIFTY"] else 100 if underlying == "BANKNIFTY" else 50
     strikes = get_strike_range(spot_price, step=step, count=30)
-    atm = round(spot_price / step) * step
+    atm     = round(spot_price / step) * step
+    # WHY: Clamp ATM to nearest strike in list if spot moved since list was built
+    if atm not in strikes:
+        atm = min(strikes, key=lambda x: abs(x - spot_price))
 
     strike = st.select_slider("Strike Price", options=strikes, value=atm)
 
     diff = strike - atm
     if diff == 0:
-        moneyness = "🎯 ATM (At The Money)"
+        st.caption("🎯 **ATM** — At The Money")
     elif (opt_type == "CE" and diff < 0) or (opt_type == "PE" and diff > 0):
-        moneyness = f"💚 ITM (In The Money) by {abs(diff)}"
+        st.caption(f"💚 **ITM** — In The Money by **{abs(diff)}** points")
     else:
-        moneyness = f"🔴 OTM (Out of The Money) by {abs(diff)}"
-    st.caption(moneyness)
+        st.caption(f"🔴 **OTM** — Out of The Money by **{abs(diff)}** points")
 
-    option_price = get_option_price(underlying, expiry, strike, opt_type)
+    # ── Option price ───────────────────────────────────────────────────────
+    opt_price_raw, opt_src = get_option_price(underlying, expiry, strike, opt_type)
+    option_price = render_price_badge(opt_price_raw, opt_src, label="Option Premium")
 
+    if option_price is None:
+        if opt_src == "auth_error":
+            st.stop()
+        # WHY: Let user manually enter premium when live fetch fails
+        option_price = st.number_input(
+            "Enter Option Premium manually (₹)",
+            min_value=0.05, value=100.0, step=0.05,
+            help="Check NSE website or Kite app for current premium"
+        )
+
+    # ── Order summary before placing ───────────────────────────────────────
     col3, col4 = st.columns(2)
     with col3:
-        if option_price:
-            st.success(f"📡 Option Price: ₹ {option_price:,.2f}")
-        else:
-            st.warning("⚠️ Live price unavailable — enter manually")
-            option_price = st.number_input("Option Premium (₹)", min_value=0.05, value=100.0, step=0.05)
-
-    with col4:
         lots = st.number_input("Number of Lots", min_value=1, value=1, step=1)
-        total_qty = lots * lot_size
+    with col4:
+        total_qty  = lots * lot_size
         total_cost = option_price * total_qty
-        st.info(f"Qty: {total_qty} | Total: ₹ {total_cost:,.2f}")
+        st.info(f"**Qty:** {total_qty}  |  **Total:** ₹ {total_cost:,.2f}")
 
     action = st.radio("Action", ["BUY", "SELL"], horizontal=True)
 
-    btn_label = f"{'🟢 BUY' if action == 'BUY' else '🔴 SELL'} {underlying} {strike} {opt_type} ({expiry})"
+    # WHY: Show remaining capital BEFORE clicking — helps avoid failed order
+    _pf = load_fo_portfolio()
+    if action == "BUY":
+        remaining = _pf["cash"] - total_cost
+        if remaining < 0:
+            st.error(f"❌ Insufficient capital — short by ₹{abs(remaining):,.2f}")
+        else:
+            st.caption(f"Capital after this trade: ₹ {remaining:,.2f}")
+
+    btn_label = (
+        f"{'🟢 BUY' if action == 'BUY' else '🔴 SELL'} "
+        f"{underlying} {strike} {opt_type}  |  {expiry}"
+    )
     if st.button(btn_label, type="primary", use_container_width=True):
         result = place_fo_order(
             instrument_type=inst_type,
@@ -432,299 +638,193 @@ with tab1:
         else:
             t = result["success"]
             st.success(
-                f"✅ {t['action']} {t['lots']} lot(s) of {t['underlying']} {t['strike']} {t['opt_type']} "
-                f"@ ₹{t['price']:,.2f} | Total: ₹{t['total']:,.2f}"
+                f"✅ **{t['action']}** {t['lots']} lot(s) × {t['lot_size']} = "
+                f"{t['qty']} qty  |  {t['underlying']} {t['strike']} {t['opt_type']}  "
+                f"|  @ ₹{t['price']:,.2f}  |  **Total: ₹{t['total']:,.2f}**"
             )
             st.rerun()
 
 
+# ══════════════════════════════════════════════════════════════════════════
+# TAB 2 — OPEN POSITIONS
+# ══════════════════════════════════════════════════════════════════════════
 with tab2:
     st.subheader("💼 Open Positions")
     portfolio = load_fo_portfolio()
-    positions = portfolio["positions"]
+    positions = portfolio.get("positions", {})
 
-    if positions:
-        rows = []
-        total_invested = 0
-        total_current = 0
+    if not positions:
+        st.info("No open positions. Place your first F&O order! 👆")
+    else:
+        rows           = []
+        total_invested = 0.0
+        total_current  = 0.0
+        has_stale      = False
 
         for key, pos in positions.items():
-            current_price = get_option_price(
+            cur_price, cur_src = get_option_price(
                 pos["underlying"], pos["expiry"], pos["strike"], pos["opt_type"]
-            ) or pos["avg_price"]
+            )
 
-            qty = pos["lots"] * pos["lot_size"]
+            # WHY: If live price unavailable, fall back to avg buy price
+            # This means P&L shows ₹0 for that row — correct and honest
+            if cur_price is None:
+                cur_price   = pos["avg_price"]
+                price_label = f"₹ {cur_price:,.2f} ⚠️"
+                has_stale   = True
+            else:
+                price_label = f"₹ {cur_price:,.2f} 📡"
+
+            qty      = pos["lots"] * pos["lot_size"]
             invested = pos["avg_price"] * qty
-            current = current_price * qty
-            pnl = current - invested
-            pnl_pct = (pnl / invested) * 100 if invested else 0
+            current  = cur_price * qty
+            pnl      = current - invested
+            pnl_pct  = (pnl / invested * 100) if invested else 0.0
+
             total_invested += invested
-            total_current += current
+            total_current  += current
+
+            # WHY: Show DTE per row — positions expiring soon need attention
+            dte_pos = days_to_expiry(pos["expiry"])
+            if dte_pos == 0:
+                dte_label = "TODAY ⚠️"
+            elif dte_pos < 0:
+                dte_label = f"EXPIRED ({abs(dte_pos)}d ago)"
+            else:
+                dte_label = f"{dte_pos}d left"
 
             rows.append({
-                "Underlying": pos["underlying"],
-                "Expiry": pos["expiry"],
-                "Strike": pos["strike"],
-                "Type": pos["opt_type"],
-                "Lots": pos["lots"],
-                "Qty": qty,
-                "Avg Price": f"₹ {pos['avg_price']:,.2f}",
-                "Current Price": f"₹ {current_price:,.2f}",
-                "Invested": f"₹ {invested:,.2f}",
+                "Underlying":    pos["underlying"],
+                "Expiry":        f"{pos['expiry']} ({dte_label})",
+                "Strike":        pos["strike"],
+                "Type":          pos["opt_type"],
+                "Lots":          pos["lots"],
+                "Qty":           qty,
+                "Avg Price":     f"₹ {pos['avg_price']:,.2f}",
+                "Current Price": price_label,
+                "Invested":      f"₹ {invested:,.2f}",
                 "Current Value": f"₹ {current:,.2f}",
-                "P&L": f"₹ {pnl:,.2f}",
-                "P&L %": f"{pnl_pct:.2f}%",
+                "P&L":           f"₹ {pnl:,.2f}",
+                "P&L %":         f"{pnl_pct:+.2f}%",
             })
 
-        df = pd.DataFrame(rows)
-        st.dataframe(df, use_container_width=True, hide_index=True)
+        if has_stale:
+            st.warning(
+                "⚠️ Rows marked with ⚠️ could not fetch live price — "
+                "showing avg buy price. P&L for those rows is ₹ 0 (not actual gain/loss)."
+            )
 
-        total_pnl = total_current - total_invested
-        total_pnl_pct = (total_pnl / total_invested) * 100 if total_invested else 0
-        net_worth = portfolio["cash"] + total_current
+        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+        total_pnl     = total_current - total_invested
+        total_pnl_pct = (total_pnl / total_invested * 100) if total_invested else 0.0
+        net_worth     = portfolio["cash"] + total_current
 
         c1, c2, c3, c4 = st.columns(4)
-        with c1:
-            st.metric("Cash Balance", f"₹ {portfolio['cash']:,.2f}")
-        with c2:
-            st.metric("Premium Paid", f"₹ {total_invested:,.2f}")
-        with c3:
-            st.metric("Current Value", f"₹ {total_current:,.2f}")
-        with c4:
-            st.metric("Unrealized P&L", f"₹ {total_pnl:,.2f}", delta=f"{total_pnl_pct:.2f}%")
+        c1.metric("Cash Balance",   f"₹ {portfolio['cash']:,.2f}")
+        c2.metric("Premium Paid",   f"₹ {total_invested:,.2f}")
+        c3.metric("Current Value",  f"₹ {total_current:,.2f}")
+        c4.metric("Unrealized P&L", f"₹ {total_pnl:,.2f}", delta=f"{total_pnl_pct:+.2f}%")
 
-        st.metric("💰 Net Worth", f"₹ {net_worth:,.2f}",
-                  delta=f"₹ {net_worth - STARTING_CAPITAL:,.2f} from ₹{STARTING_CAPITAL:,.0f}")
-    else:
-        st.info("No open positions. Place your first F&O order! 👆")
+        st.metric(
+            "💰 Net Worth",
+            f"₹ {net_worth:,.2f}",
+            delta=f"₹ {net_worth - STARTING_CAPITAL:,.2f} from starting ₹{STARTING_CAPITAL:,.0f}",
+        )
 
 
+# ══════════════════════════════════════════════════════════════════════════
+# TAB 3 — TRADE HISTORY
+# ══════════════════════════════════════════════════════════════════════════
 with tab3:
     st.subheader("📋 Trade History")
     trades = load_fo_trades()
 
-    if trades:
-        tdf = pd.DataFrame(trades)
-        display_cols = {
-            "id": "#", "traded_at": "Time", "underlying": "Underlying",
-            "expiry": "Expiry", "strike": "Strike", "opt_type": "Type",
-            "action": "Action", "lots": "Lots", "price": "Price", "premium": "Total"
-        }
-        tdf = tdf[[c for c in display_cols if c in tdf.columns]]
-        tdf = tdf.rename(columns=display_cols)
-        if "Price" in tdf.columns:
-            tdf["Price"] = tdf["Price"].apply(lambda x: f"₹ {x:,.2f}")
-        if "Total" in tdf.columns:
-            tdf["Total"] = tdf["Total"].apply(lambda x: f"₹ {x:,.2f}")
-        st.dataframe(tdf, use_container_width=True, hide_index=True, height=400)
-
-        if st.button("🗑️ Clear Trade History"):
-            store.clear_fo_trades()
-            st.success("Cleared!")
-            st.rerun()
-    else:
+    if not trades:
         st.info("No trades yet. Start trading! 🚀")
+    else:
+        tdf = pd.DataFrame(list(reversed(trades)))  # newest first
+        tdf = tdf[[
+            "id", "timestamp", "underlying", "expiry",
+            "strike", "opt_type", "action", "lots", "price", "total"
+        ]]
+        tdf.columns = ["#", "Time", "Underlying", "Expiry", "Strike", "Type", "Action", "Lots", "Price", "Total"]
+        tdf["Price"] = tdf["Price"].apply(lambda x: f"₹ {x:,.2f}")
+        tdf["Total"] = tdf["Total"].apply(lambda x: f"₹ {x:,.2f}")
+
+        st.dataframe(tdf, use_container_width=True, hide_index=True, height=400)
+        st.caption(f"Total trades recorded: **{len(trades)}**")
+
+        # WHY: Confirm before clearing — deleted history can't be recovered
+        if st.button("🗑️ Clear Trade History"):
+            st.session_state["confirm_clear_hist"] = True
+
+        if st.session_state.get("confirm_clear_hist"):
+            st.warning("⚠️ This permanently deletes all trade history!")
+            cy2, cn2 = st.columns(2)
+            with cy2:
+                if st.button("✅ Yes, Clear", use_container_width=True, key="clear_yes"):
+                    save_fo_trades([])
+                    st.session_state.pop("confirm_clear_hist", None)
+                    st.success("Trade history cleared.")
+                    st.rerun()
+            with cn2:
+                if st.button("❌ Cancel", use_container_width=True, key="clear_no"):
+                    st.session_state.pop("confirm_clear_hist", None)
+                    st.rerun()
 
 
+# ══════════════════════════════════════════════════════════════════════════
+# TAB 4 — P&L SUMMARY
+# ══════════════════════════════════════════════════════════════════════════
 with tab4:
     st.subheader("📊 P&L Summary")
     trades = load_fo_trades()
 
-    if trades:
+    if not trades:
+        st.info("No trades to summarize yet!")
+    else:
         df = pd.DataFrame(trades)
 
+        # ── By Underlying ──────────────────────────────────────────────────
+        # WHY: See which symbols you trade most and how much premium you deploy
         st.markdown("#### By Underlying")
         summary = df.groupby(["underlying", "opt_type"]).agg(
-            Total_Trades=("id", "count"),
-            Buy_Trades=("action", lambda x: (x == "BUY").sum()),
-            Sell_Trades=("action", lambda x: (x == "SELL").sum()),
-            Total_Lots=("lots", "sum"),
-            Total_Premium=("premium", "sum"),
+            Total_Trades  = ("id",     "count"),
+            Buy_Trades    = ("action", lambda x: (x == "BUY").sum()),
+            Sell_Trades   = ("action", lambda x: (x == "SELL").sum()),
+            Total_Lots    = ("lots",   "sum"),
+            Total_Premium = ("total",  "sum"),
         ).reset_index()
+        summary["Total_Premium"] = summary["Total_Premium"].apply(lambda x: f"₹ {x:,.2f}")
         st.dataframe(summary, use_container_width=True, hide_index=True)
 
+        # ── By Date ────────────────────────────────────────────────────────
+        # WHY: Track your trading activity per day — helps spot overtrading
         st.markdown("#### By Date")
-        df["date"] = pd.to_datetime(df["traded_at"]).dt.date
-        daily = df.groupby("date").agg(
-            Trades=("id", "count"),
-            Total_Premium=("premium", "sum"),
-        ).reset_index()
+        df["date"] = pd.to_datetime(df["timestamp"]).dt.date
+        daily = (
+            df.groupby("date")
+            .agg(Trades=("id", "count"), Total_Premium=("total", "sum"))
+            .reset_index()
+            .sort_values("date", ascending=False)
+        )
         daily["Total_Premium"] = daily["Total_Premium"].apply(lambda x: f"₹ {x:,.2f}")
         st.dataframe(daily, use_container_width=True, hide_index=True)
-    else:
-        st.info("No trades to summarize yet!")
 
+        # ── Capital summary ────────────────────────────────────────────────
+        # WHY: Realized P&L = what you received selling minus what you paid buying.
+        # This is your actual booked profit/loss, ignoring open positions.
+        st.markdown("#### Capital Summary")
+        total_bought = df[df["action"] == "BUY"]["total"].sum()
+        total_sold   = df[df["action"] == "SELL"]["total"].sum()
+        realized_pnl = total_sold - total_bought
 
-# ── Tab 5: Alerts ──────────────────────────────────────────────────────────
-with tab5:
-    st.subheader("🔔 Alerts")
-
-    # ── Telegram Setup ─────────────────────────────────────────────────────
-    with st.expander("⚙️ Telegram Setup", expanded=not bool(store.get_setting("telegram_token"))):
-        st.markdown(
-            "**How to get your Bot Token and Chat ID:**\n"
-            "1. Open Telegram → search **@BotFather** → send `/newbot`\n"
-            "2. Follow the steps → BotFather gives you a **Bot Token**\n"
-            "3. Send any message to your new bot\n"
-            "4. Open this URL in browser to get your Chat ID:\n"
-            "   `https://api.telegram.org/bot<YOUR_TOKEN>/getUpdates`\n"
-            "5. Look for `\"id\"` inside `\"chat\"` — that's your Chat ID"
+        sc1, sc2, sc3 = st.columns(3)
+        sc1.metric("Total Premium Bought", f"₹ {total_bought:,.2f}")
+        sc2.metric("Total Premium Sold",   f"₹ {total_sold:,.2f}")
+        sc3.metric(
+            "Realized P&L",
+            f"₹ {realized_pnl:,.2f}",
+            delta="Profit ✅" if realized_pnl >= 0 else "Loss ❌",
         )
-        saved_token = store.get_setting("telegram_token") or ""
-        saved_chat  = store.get_setting("telegram_chat_id") or ""
-
-        tg_token = st.text_input("Bot Token", value=saved_token, type="password", placeholder="123456789:ABCdef...")
-        tg_chat  = st.text_input("Chat ID",   value=saved_chat,  placeholder="e.g. 987654321")
-
-        col_save, col_test = st.columns(2)
-        with col_save:
-            if st.button("💾 Save Telegram Config", use_container_width=True):
-                if tg_token.strip() and tg_chat.strip():
-                    store.set_setting("telegram_token", tg_token.strip())
-                    store.set_setting("telegram_chat_id", tg_chat.strip())
-                    st.success("Saved!")
-                else:
-                    st.error("Both Token and Chat ID are required.")
-        with col_test:
-            if st.button("📨 Send Test Message", use_container_width=True):
-                if tg_token.strip() and tg_chat.strip():
-                    ok, msg = ae.test_telegram_connection(tg_token.strip(), tg_chat.strip())
-                    if ok:
-                        st.success(msg)
-                    else:
-                        st.error(msg)
-                else:
-                    st.warning("Enter Token and Chat ID first.")
-
-    st.divider()
-
-    # ── Add New Alert ──────────────────────────────────────────────────────
-    st.markdown("### ➕ Add New Alert")
-
-    alert_type = st.radio("Alert Type", ["📈 Price Alert", "💰 P&L Alert"], horizontal=True)
-
-    if alert_type == "📈 Price Alert":
-        col_a, col_b = st.columns(2)
-        with col_a:
-            symbol_category = st.radio("Symbol Type", ["Index", "Stock"], horizontal=True)
-
-            if symbol_category == "Index":
-                selected_name = st.selectbox("Select Index", list(INDICES.keys()), key="alert_index")
-                api_symbol  = INDICES[selected_name]["symbol"]
-                api_exchange = INDEX_SPOT_EXCHANGE[selected_name]
-                current_spot = get_live_price(api_symbol, api_exchange) or 0.0
-            else:
-                selected_name = st.selectbox("Select Stock", FO_STOCKS, key="alert_stock")
-                api_symbol   = selected_name
-                api_exchange = "NSE"
-                current_spot = get_live_price(api_symbol, api_exchange) or 0.0
-
-            if current_spot:
-                st.info(f"📡 Current Price: ₹ {current_spot:,.2f}")
-
-        with col_b:
-            price_condition = st.radio("Condition", ["ABOVE", "BELOW"], horizontal=True, key="price_cond")
-            target_price = st.number_input(
-                "Target Price (₹)",
-                min_value=0.01,
-                value=float(round(current_spot * 1.01)) if current_spot else 100.0,
-                step=10.0,
-                key="target_price",
-            )
-
-        if st.button("🔔 Add Price Alert", type="primary", use_container_width=True):
-            if not store.get_setting("telegram_token"):
-                st.error("⚠️ Please configure Telegram first (expand setup above).")
-            else:
-                store.create_alert(
-                    alert_type="PRICE",
-                    display_name=selected_name,
-                    symbol=api_symbol,
-                    exchange=api_exchange,
-                    condition=price_condition,
-                    target_value=target_price,
-                )
-                st.success(
-                    f"✅ Alert set: {selected_name} {price_condition} ₹{target_price:,.2f}"
-                )
-                st.rerun()
-
-    else:  # P&L Alert
-        col_a, col_b = st.columns(2)
-        with col_a:
-            pnl_condition = st.radio("Condition", ["ABOVE", "BELOW"], horizontal=True, key="pnl_cond")
-        with col_b:
-            current_pnl = get_current_pnl()
-            st.info(f"Current P&L: ₹ {current_pnl:,.2f}")
-            target_pnl = st.number_input(
-                "Target P&L (₹)",
-                value=5000.0,
-                step=500.0,
-                key="target_pnl",
-            )
-
-        if st.button("🔔 Add P&L Alert", type="primary", use_container_width=True):
-            if not store.get_setting("telegram_token"):
-                st.error("⚠️ Please configure Telegram first (expand setup above).")
-            else:
-                store.create_alert(
-                    alert_type="PNL",
-                    display_name="Portfolio P&L",
-                    symbol=None,
-                    exchange=None,
-                    condition=pnl_condition,
-                    target_value=target_pnl,
-                )
-                st.success(
-                    f"✅ P&L Alert set: P&L {pnl_condition} ₹{target_pnl:,.2f}"
-                )
-                st.rerun()
-
-    st.divider()
-
-    # ── Active Alerts ──────────────────────────────────────────────────────
-    st.markdown("### 📋 Active Alerts")
-    active_alerts = store.load_active_alerts()
-
-    if active_alerts:
-        for alert in active_alerts:
-            col1, col2, col3, col4, col5 = st.columns([2, 2, 2, 2, 1])
-            with col1:
-                st.write(f"**{alert['display_name']}**")
-            with col2:
-                badge = "📈 Price" if alert["alert_type"] == "PRICE" else "💰 P&L"
-                st.write(badge)
-            with col3:
-                direction = "🔼" if alert["condition"] == "ABOVE" else "🔽"
-                st.write(f"{direction} {alert['condition']} ₹{alert['target_value']:,.2f}")
-            with col4:
-                st.write(alert["created_at"][:16].replace("T", " "))
-            with col5:
-                if st.button("🗑️", key=f"del_alert_{alert['id']}"):
-                    store.delete_alert(alert["id"])
-                    st.rerun()
-    else:
-        st.info("No active alerts. Add one above! 👆")
-
-    st.divider()
-
-    # ── Triggered Alerts History ───────────────────────────────────────────
-    st.markdown("### ✅ Triggered Alerts History")
-    all_alerts = store.load_all_alerts()
-    triggered = [a for a in all_alerts if a["status"] == "TRIGGERED"]
-
-    if triggered:
-        tdf = pd.DataFrame(triggered)
-        tdf = tdf[["display_name", "alert_type", "condition", "target_value", "created_at", "triggered_at"]]
-        tdf.columns = ["Symbol", "Type", "Condition", "Target ₹", "Created", "Triggered At"]
-        tdf["Target ₹"] = tdf["Target ₹"].apply(lambda x: f"₹ {x:,.2f}")
-        tdf["Created"]      = tdf["Created"].str[:16].str.replace("T", " ")
-        tdf["Triggered At"] = tdf["Triggered At"].str[:16].str.replace("T", " ")
-        st.dataframe(tdf, use_container_width=True, hide_index=True)
-
-        if st.button("🗑️ Clear Triggered History"):
-            store.clear_triggered_alerts()
-            st.success("Cleared!")
-            st.rerun()
-    else:
-        st.info("No alerts have been triggered yet.")

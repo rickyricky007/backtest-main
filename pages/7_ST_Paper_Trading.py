@@ -1,5 +1,3 @@
-"""Paper Trading — simulate trades with real market prices from Kite."""
-
 from __future__ import annotations
 
 import json
@@ -12,247 +10,184 @@ import streamlit as st
 import kite_data as kd
 import auth_streamlit as auth
 
-st.set_page_config(
-    page_title="Paper Trading",
-    page_icon="📝",
-    layout="wide",
-    initial_sidebar_state="expanded",
-)
+st.set_page_config(page_title="Paper Trading", page_icon="📝", layout="wide")
 
 auth.render_auth_cleared_banner()
 
-# ── Storage ────────────────────────────────────────────────────────────────
+# ── Files ───────────────────────────────────────
 PAPER_FILE = Path("paper_trades.json")
 PORTFOLIO_FILE = Path("paper_portfolio.json")
 
-NIFTY50_STOCKS = [
-    "RELIANCE", "TCS", "HDFCBANK", "INFY", "ICICIBANK",
-    "HINDUNILVR", "ITC", "SBIN", "BHARTIARTL", "KOTAKBANK",
-    "LT", "AXISBANK", "ASIANPAINT", "MARUTI", "TITAN",
-    "SUNPHARMA", "ULTRACEMCO", "WIPRO", "NESTLEIND", "POWERGRID",
-    "NTPC", "TECHM", "HCLTECH", "ONGC", "BAJFINANCE",
-    "BAJAJFINSV", "JSWSTEEL", "TATAMOTORS", "TATASTEEL", "ADANIENT",
-    "ADANIPORTS", "COALINDIA", "DIVISLAB", "DRREDDY", "EICHERMOT",
-    "GRASIM", "HEROMOTOCO", "HINDALCO", "INDUSINDBK", "M&M",
-    "CIPLA", "BPCL", "BRITANNIA", "APOLLOHOSP", "TATACONSUM",
-    "SBILIFE", "HDFCLIFE", "UPL", "LTIM", "BAJAJ-AUTO",
-]
+
+# ── Safe Load / Save ────────────────────────────
+def load_trades():
+    try:
+        return json.loads(PAPER_FILE.read_text()) if PAPER_FILE.exists() else []
+    except:
+        return []
 
 
-def load_trades() -> list:
-    if PAPER_FILE.exists():
-        return json.loads(PAPER_FILE.read_text())
-    return []
-
-
-def save_trades(trades: list) -> None:
+def save_trades(trades):
     PAPER_FILE.write_text(json.dumps(trades, indent=2))
 
 
-def load_portfolio() -> dict:
-    if PORTFOLIO_FILE.exists():
-        return json.loads(PORTFOLIO_FILE.read_text())
-    return {"cash": 100000.0, "holdings": {}}
-
-
-def save_portfolio(portfolio: dict) -> None:
-    PORTFOLIO_FILE.write_text(json.dumps(portfolio, indent=2))
-
-
-def get_live_price(symbol: str) -> float | None:
+def load_portfolio():
     try:
-        quote = kd.kite().quote(f"NSE:{symbol}")
-        return quote[f"NSE:{symbol}"]["last_price"]
-    except Exception:
+        return json.loads(PORTFOLIO_FILE.read_text()) if PORTFOLIO_FILE.exists() else {
+            "cash": 100000.0,
+            "holdings": {}
+        }
+    except:
+        return {"cash": 100000.0, "holdings": {}}
+
+
+def save_portfolio(p):
+    PORTFOLIO_FILE.write_text(json.dumps(p, indent=2))
+
+
+# ── LIVE PRICE (FIXED + SAFE + CACHED) ──────────
+@st.cache_data(ttl=5)
+def get_live_price(symbol: str):
+    try:
+        kite = kd.get_kite()
+        q = kite.quote(f"NSE:{symbol}")
+        return q[f"NSE:{symbol}"]["last_price"]
+    except:
         return None
 
 
-def place_order(symbol: str, qty: int, order_type: str, price: float) -> dict:
-    portfolio = load_portfolio()
+# ── ORDER LOGIC ─────────────────────────────────
+def place_order(symbol, qty, order_type, price):
+    p = load_portfolio()
     trades = load_trades()
-    total_value = price * qty
+
+    total = price * qty
 
     if order_type == "BUY":
-        if portfolio["cash"] < total_value:
-            return {"error": f"Insufficient cash! Need ₹{total_value:,.2f}, have ₹{portfolio['cash']:,.2f}"}
-        portfolio["cash"] -= total_value
-        holdings = portfolio["holdings"]
-        if symbol in holdings:
-            # average price calculation
-            existing_qty = holdings[symbol]["qty"]
-            existing_avg = holdings[symbol]["avg_price"]
-            new_qty = existing_qty + qty
-            new_avg = ((existing_qty * existing_avg) + (qty * price)) / new_qty
-            holdings[symbol] = {"qty": new_qty, "avg_price": new_avg}
-        else:
-            holdings[symbol] = {"qty": qty, "avg_price": price}
+        if p["cash"] < total:
+            return {"error": "Insufficient cash"}
 
-    elif order_type == "SELL":
-        holdings = portfolio["holdings"]
-        if symbol not in holdings or holdings[symbol]["qty"] < qty:
-            held = holdings.get(symbol, {}).get("qty", 0)
-            return {"error": f"Insufficient holdings! You hold {held} shares of {symbol}"}
-        portfolio["cash"] += total_value
-        holdings[symbol]["qty"] -= qty
-        if holdings[symbol]["qty"] == 0:
-            del holdings[symbol]
+        p["cash"] -= total
+
+        h = p["holdings"]
+        if symbol in h:
+            old_qty = h[symbol]["qty"]
+            old_avg = h[symbol]["avg_price"]
+
+            new_qty = old_qty + qty
+            new_avg = ((old_avg * old_qty) + (price * qty)) / new_qty
+
+            h[symbol] = {"qty": new_qty, "avg_price": new_avg}
+        else:
+            h[symbol] = {"qty": qty, "avg_price": price}
+
+    else:  # SELL
+        h = p["holdings"]
+
+        if symbol not in h or h[symbol]["qty"] < qty:
+            return {"error": "Not enough holdings"}
+
+        p["cash"] += total
+        h[symbol]["qty"] -= qty
+
+        if h[symbol]["qty"] == 0:
+            del h[symbol]
 
     trade = {
         "id": len(trades) + 1,
         "symbol": symbol,
         "qty": qty,
-        "order_type": order_type,
+        "type": order_type,
         "price": price,
-        "total": total_value,
-        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "total": total,
+        "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     }
+
     trades.append(trade)
     save_trades(trades)
-    save_portfolio(portfolio)
+    save_portfolio(p)
+
     return {"success": trade}
 
 
-# ── Sidebar ────────────────────────────────────────────────────────────────
+# ── Sidebar ─────────────────────────────────────
 with st.sidebar:
-    st.subheader("💰 Paper Portfolio")
-    portfolio = load_portfolio()
-    st.metric("Available Cash", f"₹ {portfolio['cash']:,.2f}")
-    st.divider()
+    p = load_portfolio()
+    st.metric("Cash", f"₹ {p['cash']:,.0f}")
 
-    if st.button("🔄 Reset Portfolio", use_container_width=True):
+    if st.button("Reset"):
         save_portfolio({"cash": 100000.0, "holdings": {}})
         save_trades([])
-        st.success("Portfolio reset to ₹1,00,000!")
         st.rerun()
 
-    auth.render_sidebar_kite_session(key_prefix="paper")
-    auth.render_logout_controls(key="kite_logout_paper")
+    auth.render_sidebar_kite_session()
+    auth.render_logout_controls()
 
 if not auth.ensure_kite_ready():
     st.stop()
 
-# ── Header ─────────────────────────────────────────────────────────────────
+# ── UI ──────────────────────────────────────────
 st.title("📝 Paper Trading")
-st.caption("Simulate trades with real-time Kite prices. Starting capital: ₹1,00,000")
 
-portfolio = load_portfolio()
-trades = load_trades()
+symbol = st.text_input("Symbol", "RELIANCE").upper()
+qty = st.number_input("Qty", 1, 1000, 1)
+order_type = st.radio("Type", ["BUY", "SELL"])
 
-# ── Place Order ────────────────────────────────────────────────────────────
-st.subheader("Place Order")
-
-col1, col2 = st.columns(2)
-
-with col1:
-    stock_source = st.radio("Stock selection", ["Nifty 50", "Type manually"], horizontal=True)
-    if stock_source == "Nifty 50":
-        symbol = st.selectbox("Select stock", NIFTY50_STOCKS)
-    else:
-        symbol = st.text_input("Enter stock symbol", placeholder="e.g. RELIANCE").upper().strip()
-
-with col2:
-    order_type = st.radio("Order type", ["BUY", "SELL"], horizontal=True)
-    qty = st.number_input("Quantity", min_value=1, value=1, step=1)
-
-# Fetch live price
+price = None
 if symbol:
-    price_placeholder = st.empty()
-    live_price = get_live_price(symbol)
-    if live_price:
-        price_placeholder.success(f"📡 Live price of **{symbol}**: ₹ {live_price:,.2f}")
-        total_cost = live_price * qty
-        st.info(f"💸 Total {'Cost' if order_type == 'BUY' else 'Value'}: ₹ {total_cost:,.2f}")
+    price = get_live_price(symbol)
+
+    if price:
+        st.success(f"{symbol} ₹ {price}")
     else:
-        price_placeholder.warning(f"⚠️ Could not fetch price for {symbol}. Check symbol name.")
-        live_price = None
+        st.warning("Price not available")
 
-    if st.button(f"{'🟢 BUY' if order_type == 'BUY' else '🔴 SELL'} {symbol}", type="primary", use_container_width=True):
-        if not live_price:
-            st.error("Cannot place order — price not available!")
+if st.button("Place Order"):
+
+    if not price:
+        st.error("No price")
+    else:
+        res = place_order(symbol, qty, order_type, price)
+
+        if "error" in res:
+            st.error(res["error"])
         else:
-            result = place_order(symbol, qty, order_type, live_price)
-            if "error" in result:
-                st.error(result["error"])
-            else:
-                t = result["success"]
-                st.success(f"✅ {t['order_type']} {t['qty']} shares of {t['symbol']} @ ₹{t['price']:,.2f}")
-                st.rerun()
+            st.success("Order placed")
+            st.rerun()
 
-st.divider()
+# ── Portfolio ───────────────────────────────────
+st.subheader("Portfolio")
 
-# ── Portfolio Summary ──────────────────────────────────────────────────────
-st.subheader("📊 Portfolio Summary")
+p = load_portfolio()
+rows = []
 
-portfolio = load_portfolio()
-holdings = portfolio["holdings"]
+for sym, d in p["holdings"].items():
+    cp = get_live_price(sym)
+    avg = d["avg_price"]
+    qty = d["qty"]
 
-if holdings:
-    rows = []
-    total_invested = 0
-    total_current = 0
+    val = (cp or avg) * qty
+    pnl = val - (avg * qty)
 
-    for sym, data in holdings.items():
-        current_price = get_live_price(sym)
-        avg_price = data["avg_price"]
-        hold_qty = data["qty"]
-        invested = avg_price * hold_qty
-        current = (current_price or avg_price) * hold_qty
-        pnl = current - invested
-        pnl_pct = (pnl / invested) * 100 if invested else 0
-        total_invested += invested
-        total_current += current
+    rows.append({
+        "Symbol": sym,
+        "Qty": qty,
+        "Avg": avg,
+        "LTP": cp,
+        "P&L": pnl
+    })
 
-        rows.append({
-            "Symbol": sym,
-            "Qty": hold_qty,
-            "Avg Price": f"₹ {avg_price:,.2f}",
-            "Current Price": f"₹ {current_price:,.2f}" if current_price else "N/A",
-            "Invested": f"₹ {invested:,.2f}",
-            "Current Value": f"₹ {current:,.2f}",
-            "P&L": f"₹ {pnl:,.2f}",
-            "P&L %": f"{pnl_pct:.2f}%",
-        })
-
-    df = pd.DataFrame(rows)
-    st.dataframe(df, use_container_width=True, hide_index=True)
-
-    total_pnl = total_current - total_invested
-    total_pnl_pct = (total_pnl / total_invested) * 100 if total_invested else 0
-    net_worth = portfolio["cash"] + total_current
-
-    c1, c2, c3, c4 = st.columns(4)
-    with c1:
-        st.metric("Cash Balance", f"₹ {portfolio['cash']:,.2f}")
-    with c2:
-        st.metric("Invested Value", f"₹ {total_invested:,.2f}")
-    with c3:
-        st.metric("Current Value", f"₹ {total_current:,.2f}")
-    with c4:
-        st.metric("Total P&L", f"₹ {total_pnl:,.2f}", delta=f"{total_pnl_pct:.2f}%")
-
-    st.metric("💰 Net Worth", f"₹ {net_worth:,.2f}",
-              delta=f"₹ {net_worth - 100000:,.2f} from ₹1,00,000")
+if rows:
+    st.dataframe(pd.DataFrame(rows))
 else:
-    st.info("No holdings yet. Place your first order above! 👆")
+    st.info("No holdings")
 
-st.divider()
+# ── Trades ──────────────────────────────────────
+st.subheader("Trades")
 
-# ── Trade History ──────────────────────────────────────────────────────────
-st.subheader("📋 Trade History")
+tr = load_trades()
 
-trades = load_trades()
-if trades:
-    trades_reversed = list(reversed(trades))
-    tdf = pd.DataFrame(trades_reversed)
-    tdf = tdf[["id", "timestamp", "symbol", "order_type", "qty", "price", "total"]]
-    tdf.columns = ["#", "Time", "Symbol", "Type", "Qty", "Price", "Total Value"]
-    tdf["Price"] = tdf["Price"].apply(lambda x: f"₹ {x:,.2f}")
-    tdf["Total Value"] = tdf["Total Value"].apply(lambda x: f"₹ {x:,.2f}")
-    st.dataframe(tdf, use_container_width=True, hide_index=True, height=300)
-
-    if st.button("🗑️ Clear Trade History", use_container_width=False):
-        save_trades([])
-        st.success("Trade history cleared!")
-        st.rerun()
+if tr:
+    st.dataframe(pd.DataFrame(tr[::-1]))
 else:
-    st.info("No trades yet. Start trading! 🚀")
+    st.info("No trades")
