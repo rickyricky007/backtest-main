@@ -16,6 +16,8 @@ from dotenv import load_dotenv
 
 import auth_streamlit as auth
 import kite_data as kd
+from market_intelligence import market_session_status, expiry_alert
+from db import read_df
 
 load_dotenv()
 
@@ -245,21 +247,64 @@ def build_market_context(snapshot: dict) -> str:
 def get_db_context() -> str:
     ctx = ""
     try:
-        conn = sqlite3.connect("dashboard.sqlite")
-        cur  = conn.cursor()
-        try:
-            cur.execute(
-                "SELECT strategy_name, symbol, total_return_pct, num_trades "
-                "FROM backtest_runs ORDER BY ran_at DESC LIMIT 5"
-            )
-            rows = cur.fetchall()
-            if rows:
-                ctx += "\n📈 Recent Backtests:\n"
-                for r in rows:
-                    ctx += f"  {r[0]} | {r[1]} | Return: {r[2]}% | Trades: {r[3]}\n"
-        except Exception:
-            pass
-        conn.close()
+        # Today's strategy trades
+        today = datetime.now().strftime("%Y-%m-%d")
+        trades = read_df(
+            "SELECT strategy, symbol, action, price, pnl, timestamp "
+            "FROM strategy_trades WHERE DATE(timestamp) = ? ORDER BY timestamp DESC LIMIT 10",
+            (today,)
+        )
+        if not trades.empty:
+            total_pnl = trades["pnl"].sum()
+            ctx += f"\n📊 Today's Strategy Trades ({len(trades)}):\n"
+            ctx += f"- Total P&L today: ₹{total_pnl:+,.0f}\n"
+            for _, r in trades.head(5).iterrows():
+                ctx += f"  {r['strategy']} | {r['symbol']} {r['action']} @ ₹{r['price']} | P&L ₹{r['pnl']:+.0f}\n"
+
+        # Recent orders
+        orders = read_df(
+            "SELECT symbol, action, quantity, fill_price, mode, status, timestamp "
+            "FROM engine_orders ORDER BY timestamp DESC LIMIT 5"
+        )
+        if not orders.empty:
+            ctx += f"\n📋 Recent Orders ({len(orders)}):\n"
+            for _, r in orders.iterrows():
+                ctx += f"  [{r['mode']}] {r['action']} {r['quantity']} {r['symbol']} @ ₹{r['fill_price']} — {r['status']}\n"
+
+        # Journal entries
+        journal = read_df(
+            "SELECT date, symbol, direction, pnl, setup, notes "
+            "FROM trade_journal ORDER BY date DESC LIMIT 3"
+        )
+        if not journal.empty:
+            ctx += f"\n📓 Trade Journal (last {len(journal)} entries):\n"
+            for _, r in journal.iterrows():
+                ctx += f"  {r['date']} | {r['symbol']} {r['direction']} | P&L ₹{r['pnl']:+.0f} | {r['setup']}\n"
+
+    except Exception:
+        pass
+    return ctx
+
+
+def get_market_intelligence_context() -> str:
+    """Add global market hours + expiry info to chatbot context."""
+    ctx = ""
+    try:
+        session = market_session_status()
+        ctx += f"\n🌍 Market Sessions ({session['ist_time']}):\n"
+        ctx += f"- NSE Phase: {session['nse_phase']}\n"
+        for s in session["sessions"]:
+            ctx += f"- {s['market']}: {s['status']}\n"
+
+        expiry = expiry_alert()
+        ctx += f"\n📅 Expiry Info:\n"
+        ctx += f"- Weekly expiry: {expiry['weekly_expiry']} (in {expiry['dte_weekly']} days)\n"
+        ctx += f"- Monthly expiry: {expiry['monthly_expiry']} (in {expiry['dte_monthly']} days)\n"
+        if expiry["alerts"]:
+            ctx += "- Alerts:\n"
+            for a in expiry["alerts"]:
+                ctx += f"  {a}\n"
+
     except Exception:
         pass
     return ctx
@@ -283,20 +328,42 @@ def read_uploaded_file(uploaded_file) -> str:
 
 
 def build_system_context(auto_read: bool, uploaded_files, snapshot: dict) -> str:
-    ctx = (
-        "You are an expert trading assistant for Indian markets (NSE, BSE, NFO). "
-        "You have real-time Zerodha Kite account data below. "
-        "Always use exact live numbers for balance/holdings/positions/indices. "
-        "If Kite is not connected, say so clearly. "
-        "Be concise and actionable. Use ₹ for Indian Rupees.\n\n"
-    )
+    ctx = """You are an expert AI trading assistant built into Ricky's algo trading platform.
+
+PRODUCT KNOWLEDGE — you have full access to this system:
+- Signal Scanner: 10-indicator confluence engine (RSI, MACD, BB, Supertrend, EMA, VWAP, Volume, ADX, Stochastic, OI)
+- Score range -15 to +15 | BUY ≥ +6 | SELL ≤ -6
+- Universe: 6 F&O indices + ~180 F&O stocks
+- Strategy Hub: RSI, SMA, VWAP, ORB, Short Straddle, Short Strangle, Long Straddle strategies
+- Options Chain: live IV, Greeks, OI, PCR, max pain
+- F&O Dashboard: IV rank, expiry calendar, portfolio Greeks
+- Backtest Lab: walk-forward validation, parameter optimisation
+- Trade Journal: personal diary with analytics
+- Risk Manager: daily loss limits, max positions, Greeks exposure
+- Order Manager: PAPER and LIVE modes, 6 order types, slippage model
+- Stop Loss Manager: trailing SL, target exits
+
+RULES:
+- Always use ₹ for Indian Rupees
+- Be concise and actionable
+- If Kite not connected, say clearly and suggest running generate_token.py
+- For market timing questions, use the session data provided
+- For trade advice, always mention risk management
+
+DASHBOARD PAGES AVAILABLE:
+Holdings | Positions | Funds | Historical Data | Strategy Hub | Chatbot |
+ST Paper Trading | FO Paper Trading | Options Chain | FO Dashboard |
+Strategy PnL | Trade Journal | System Status | Backtest | Signal Scanner
+
+"""
     ctx += build_market_context(snapshot)
     ctx += get_db_context()
+    ctx += get_market_intelligence_context()
 
     if auto_read:
         for fp in sorted(glob.glob("*.py") + glob.glob("pages/*.py")):
             try:
-                ctx += f"\n📄 {fp}:\n```python\n{open(fp).read()[:800]}\n```\n"
+                ctx += f"\n📄 {fp}:\n```python\n{open(fp).read()[:600]}\n```\n"
             except Exception:
                 pass
 
@@ -305,7 +372,7 @@ def build_system_context(auto_read: bool, uploaded_files, snapshot: dict) -> str
             f.seek(0)
             ctx += read_uploaded_file(f)
 
-    return ctx[:14000]
+    return ctx[:16000]
 
 
 # ── Direct replies (no Claude token used) ────────────────────────────────────
