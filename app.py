@@ -34,19 +34,35 @@ def _positions():
 
 
 @st.cache_data(ttl=60, show_spinner="Loading indices…")
-def _indices():
+def _indices_yfinance():
     return {
-        "Nifty 50":   kd.index_spot("^NSEI"),
-        "Bank Nifty": kd.index_spot("^NSEBANK"),
-        "Sensex":     kd.index_spot("^BSESN"),
+        "NIFTY 50":   kd.index_spot("^NSEI"),
+        "BANK NIFTY": kd.index_spot("^NSEBANK"),
+        "SENSEX":     kd.index_spot("^BSESN"),
     }
+
+
+def _get_indices() -> tuple[dict, bool]:
+    """Return (indices_dict, is_live). Live = from KiteTicker, fallback = yfinance."""
+    ticker = kd.read_ticker_data()
+    if ticker:
+        indices = {}
+        for name in ["NIFTY 50", "BANK NIFTY", "SENSEX"]:
+            v = ticker.get(name, {})
+            indices[name] = {
+                "price":  v.get("price"),
+                "change": v.get("change"),
+                "pct":    v.get("pct"),
+            }
+        return indices, True
+    return _indices_yfinance(), False
 
 
 def _invalidate_caches() -> None:
     _margins.clear()
     _holdings.clear()
     _positions.clear()
-    _indices.clear()
+    _indices_yfinance.clear()
 
 
 with st.sidebar:
@@ -56,12 +72,21 @@ with st.sidebar:
         st.rerun()
     st.caption("Cached up to ~15s for account data, ~60s for Nifty.")
 
-    auto_refresh = st.toggle("Auto Refresh (5s)", value=False)
-    if auto_refresh:
-        st.caption("⚡ Auto refreshing every 5s")
-        time.sleep(5)
-        _invalidate_caches()
-        st.rerun()
+    # Live ticker status
+    ticker_live = bool(kd.read_ticker_data())
+    if ticker_live:
+        st.success("📡 Live ticker running", icon=None)
+        auto_refresh = st.toggle("Auto Refresh (2s)", value=True)
+        if auto_refresh:
+            time.sleep(2)
+            st.rerun()
+    else:
+        st.info("📡 Live ticker: off\n\nRun `python ticker_service.py` for real-time prices.")
+        auto_refresh = st.toggle("Auto Refresh (5s)", value=False)
+        if auto_refresh:
+            time.sleep(5)
+            _invalidate_caches()
+            st.rerun()
 
     auth.render_sidebar_kite_session(key_prefix="app")
     auth.render_logout_controls(key="kite_logout_app")
@@ -69,12 +94,12 @@ with st.sidebar:
     st.divider()
     st.subheader("Setup")
     st.markdown(
-        "1. In `.env` set **API_KEY** and **API_SECRET** (from the [Kite Connect](https://developers.kite.trade/) app).\n"
-        "2. Set the app's **redirect URL** to `http://127.0.0.1:8765/` (or your **KITE_REDIRECT_PORT**).\n"
-        "3. Use **Browser login — auto-capture** on this page, or run `python browser_login.py` from a terminal.\n"
-        "4. Optional: **ACCESS_TOKEN** in `.env` is used only if `.kite_access_token` is missing; "
-        "prefer browser login so the file stays in sync with **API_KEY**.\n"
-        "5. **Historical data** / **Strategies** pages use **dashboard.sqlite** only (no Kite)."
+        "1. In `.env` set **API_KEY** and **API_SECRET** (from [Kite Connect](https://developers.kite.trade/)).\n"
+        "2. Each morning run in terminal:\n"
+        "   ```\n   python generate_token.py\n   ```\n"
+        "3. For **live prices**, also run:\n"
+        "   ```\n   python ticker_service.py\n   ```\n"
+        "4. Refresh this page — done."
     )
 
 if not auth.ensure_kite_ready():
@@ -87,7 +112,7 @@ try:
     margins = _margins()
     holdings = _holdings()
     positions = _positions()
-    indices = _indices()
+    indices, is_live = _get_indices()
 except Exception as e:
     auth.handle_kite_fetch_error(e)
 
@@ -95,6 +120,20 @@ equity = margins.get("equity", {}) if isinstance(margins, dict) else {}
 balance = equity.get("net")
 available = equity.get("available", {})
 utilised = equity.get("utilised", {})
+
+# Live badge
+if is_live:
+    st.markdown(
+        '<span style="background:#1D9E75;color:white;padding:2px 10px;'
+        'border-radius:12px;font-size:12px;font-weight:600;">● LIVE</span>',
+        unsafe_allow_html=True,
+    )
+else:
+    st.markdown(
+        '<span style="background:#888;color:white;padding:2px 10px;'
+        'border-radius:12px;font-size:12px;">⏱ Delayed ~15min (run ticker_service.py for live)</span>',
+        unsafe_allow_html=True,
+    )
 
 # Scrolling ticker bar
 ticker_items = ""
@@ -110,9 +149,10 @@ for name, data in indices.items():
             f'</span>'
         )
 
-st.markdown(f"""
+if ticker_items:
+    st.markdown(f"""
 <div style="background:var(--secondary-background-color); border-radius:8px;
-            padding:10px 16px; overflow:hidden; margin-bottom:1rem;">
+            padding:10px 16px; overflow:hidden; margin-bottom:1rem; margin-top:0.5rem;">
   <div style="display:flex; animation: ticker 20s linear infinite; white-space:nowrap;">
     {ticker_items * 3}
   </div>

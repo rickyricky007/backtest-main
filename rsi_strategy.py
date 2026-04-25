@@ -216,6 +216,56 @@ def run_rsi_scanner(kite, instrument_map: dict, paper_trades: list, alerted: set
     return signals
 
 
+# ── Multi-Timeframe RSI Scanner ───────────────────────────────────────────
+
+def run_rsi_scanner_multi_tf(kite=None, period: int = 14) -> list[dict]:
+    """
+    Multi-timeframe RSI scanner:
+    - Scans all indices + top 50 F&O stocks
+    - Checks RSI on both 5m and 15m timeframes
+    - Signal only when BOTH timeframes agree (confluence)
+      BUY  → 5m RSI < 30 AND 15m RSI < 40
+      SELL → 5m RSI > 70 AND 15m RSI > 60
+    Returns list of dicts with: symbol, signal, price, rsi_5m, rsi_15m
+    """
+    signals = []
+    symbols = list(INDICES.keys()) + TOP_50_FO_STOCKS
+
+    for symbol in symbols:
+        try:
+            closes_5m  = fetch_ohlcv(symbol, interval="5m",  days=3)
+            closes_15m = fetch_ohlcv(symbol, interval="15m", days=5)
+
+            if len(closes_5m) < period + 1 or len(closes_15m) < period + 1:
+                continue
+
+            rsi_5m  = calculate_rsi(closes_5m,  period)
+            rsi_15m = calculate_rsi(closes_15m, period)
+            price   = closes_5m[-1]
+
+            signal = None
+            if rsi_5m < 30 and rsi_15m < 40:
+                signal = "BUY"
+            elif rsi_5m > 70 and rsi_15m > 60:
+                signal = "SELL"
+
+            if signal:
+                signals.append({
+                    "symbol":  symbol,
+                    "signal":  signal,
+                    "price":   round(price, 2),
+                    "rsi_5m":  rsi_5m,
+                    "rsi_15m": rsi_15m,
+                    "time":    datetime.now().strftime("%H:%M:%S"),
+                })
+
+        except Exception as e:
+            print(f"MTF scan error {symbol}: {e}")
+            continue
+
+    return signals
+
+
 # ── RSI Bounce Scanner (new) ───────────────────────────────────────────────
 
 def run_rsi_bounce_scanner(alerted: set) -> list[dict]:

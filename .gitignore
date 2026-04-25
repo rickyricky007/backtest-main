@@ -25,3 +25,21 @@ dashboard.sqlite
 fo_paper_trading.log
 fo_paper_portfolio.json
 fo_paper_trades.json
+
+# Kite access token (never commit real tokens)
+access_token.json
+token_status.json
+
+# Live ticker data
+ticker_data.json
+
+# Logs directory
+logs/
+*.log
+*.log.bak
+
+# Backups
+backups/
+
+# Streamlit secrets
+.streamlit/secrets.toml
