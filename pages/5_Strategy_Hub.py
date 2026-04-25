@@ -233,19 +233,12 @@ with tab1:
 
         df = pd.DataFrame(rows)
 
-        # Colour P&L column
-        def _colour_pnl(val):
-            if isinstance(val, float):
-                color = "green" if val >= 0 else "red"
-                return f"color: {color}"
-            return ""
-
-        st.dataframe(
-            df.style.map(_colour_pnl, subset=["Today P&L"])
-              .format({"Today P&L": "₹{:,.0f}"}),
-            use_container_width=True,
-            hide_index=True,
+        # Format P&L column as string with ₹ sign
+        df["Today P&L"] = df["Today P&L"].apply(
+            lambda x: f"₹{x:+,.0f}" if isinstance(x, (int, float)) else x
         )
+
+        st.dataframe(df, use_container_width=True, hide_index=True)
 
         # Summary metrics
         total_pnl    = sum(r["Today P&L"] for r in rows)
@@ -413,24 +406,17 @@ with tab4:
                 return f"color: {'green' if val >= 0 else 'red'}"
             return ""
 
-        st.dataframe(
-            perf_df.style
-                .map(_colour, subset=["Total P&L", "Avg P&L", "Best Trade", "Worst Trade"])
-                .format({
-                    "Total P&L":  "₹{:,.0f}",
-                    "Avg P&L":    "₹{:,.0f}",
-                    "Best Trade": "₹{:,.0f}",
-                    "Worst Trade":"₹{:,.0f}",
-                    "Win Rate %": "{:.1f}%",
-                }),
-            use_container_width=True,
-            hide_index=True,
-        )
+        # Format currency columns without jinja2 dependency
+        for col in ["Total P&L", "Avg P&L", "Best Trade", "Worst Trade"]:
+            perf_df[col] = perf_df[col].apply(lambda x: f"₹{x:+,.0f}" if isinstance(x, (int, float)) else x)
+        perf_df["Win Rate %"] = perf_df["Win Rate %"].apply(lambda x: f"{x:.1f}%" if isinstance(x, (int, float)) else x)
+
+        st.dataframe(perf_df, use_container_width=True, hide_index=True)
 
         # Best strategy highlight
         best = perf_df.iloc[0]
         st.divider()
         st.markdown(f"**🏆 Best Strategy:** {best['Strategy']} — "
-                    f"₹{best['Total P&L']:,.0f} total P&L | "
-                    f"{best['Win Rate %']}% win rate | "
+                    f"{best['Total P&L']} total P&L | "
+                    f"{best['Win Rate %']} win rate | "
                     f"{best['Profit Factor']}x profit factor")
