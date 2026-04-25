@@ -1,52 +1,56 @@
 """
-Database Layer — Supabase (PostgreSQL)
-======================================
-Central database module. All other files import from here.
-Replaces direct sqlite3 usage across the codebase.
+Database Layer — SQLite
+========================
+Central database module for the algo trading system.
+All other files import from here — do NOT use sqlite3 directly.
 
 Usage:
     from db import execute, query, read_df, init_tables
 
     # Write
-    execute("INSERT INTO engine_orders (...) VALUES (%s, %s)", (val1, val2))
+    execute("INSERT INTO engine_orders (...) VALUES (?, ?)", (val1, val2))
 
     # Read rows
-    rows = query("SELECT * FROM engine_orders WHERE symbol = %s", ("RELIANCE",))
+    rows = query("SELECT * FROM engine_orders WHERE symbol = ?", ("RELIANCE",))
 
     # Read as DataFrame
-    df = read_df("SELECT * FROM strategy_trades WHERE DATE(timestamp) = %s", (today,))
+    df = read_df("SELECT * FROM strategy_trades WHERE DATE(timestamp) = ?", (today,))
+
+Note: Use ? as placeholder (SQLite style), NOT %s.
+      Legacy %s placeholders are auto-converted for backwards compatibility.
 """
 
 from __future__ import annotations
 
-import os
+import sqlite3
 from contextlib import contextmanager
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
-import psycopg2
-import psycopg2.extras
-from dotenv import load_dotenv
 
-load_dotenv()
+from logger import get_logger
 
-# ── Connection string ─────────────────────────────────────────────────────────
-_DATABASE_URL = os.getenv("DATABASE_URL")
-if not _DATABASE_URL:
-    raise RuntimeError(
-        "DATABASE_URL not set in .env\n"
-        "Add: DATABASE_URL=postgresql://postgres.xxx:password@host:6543/postgres"
-    )
+log = get_logger("db")
+
+# ── DB path ───────────────────────────────────────────────────────────────────
+DB_PATH = Path(__file__).parent / "dashboard.sqlite"
+
+
+def _fix_sql(sql: str) -> str:
+    """Convert %s → ? for backwards compatibility with old PostgreSQL-style queries."""
+    return sql.replace("%s", "?")
 
 
 # ── Connection helper ─────────────────────────────────────────────────────────
 
 @contextmanager
 def _conn():
-    """Context manager — opens a connection, commits on success, rolls back on error."""
-    conn = psycopg2.connect(_DATABASE_URL, cursor_factory=psycopg2.extras.RealDictCursor)
+    """Open a SQLite connection, commit on success, rollback on error."""
+    conn = sqlite3.connect(str(DB_PATH), timeout=10)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")   # allows concurrent reads
+    conn.execute("PRAGMA foreign_keys=ON")
     try:
         yield conn
         conn.commit()
@@ -61,23 +65,33 @@ def _conn():
 
 def execute(sql: str, params: tuple = ()) -> None:
     """Run an INSERT / UPDATE / DELETE statement."""
-    with _conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute(sql, params)
+    try:
+        with _conn() as conn:
+            conn.execute(_fix_sql(sql), params)
+    except Exception:
+        log.error(f"DB execute failed\nSQL: {sql}\nParams: {params}", exc_info=True)
+        raise
 
 
 def query(sql: str, params: tuple = ()) -> list[dict]:
     """Run a SELECT and return list of dicts."""
-    with _conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute(sql, params)
+    try:
+        with _conn() as conn:
+            cur = conn.execute(_fix_sql(sql), params)
             return [dict(row) for row in cur.fetchall()]
+    except Exception:
+        log.error(f"DB query failed\nSQL: {sql}\nParams: {params}", exc_info=True)
+        return []
 
 
 def read_df(sql: str, params: tuple = ()) -> pd.DataFrame:
     """Run a SELECT and return a pandas DataFrame."""
-    rows = query(sql, params)
-    return pd.DataFrame(rows) if rows else pd.DataFrame()
+    try:
+        rows = query(sql, params)
+        return pd.DataFrame(rows) if rows else pd.DataFrame()
+    except Exception:
+        log.error("read_df failed", exc_info=True)
+        return pd.DataFrame()
 
 
 def fetchone(sql: str, params: tuple = ()) -> dict | None:
@@ -88,21 +102,24 @@ def fetchone(sql: str, params: tuple = ()) -> dict | None:
 
 def count(table: str) -> int:
     """Quick row count for a table."""
-    row = fetchone(f"SELECT COUNT(*) AS n FROM {table}")
-    return row["n"] if row else 0
+    try:
+        row = fetchone(f"SELECT COUNT(*) AS n FROM {table}")
+        return row["n"] if row else 0
+    except Exception:
+        return 0
 
 
 # ── Table initialisation ──────────────────────────────────────────────────────
 
 def init_tables() -> None:
     """Create all tables if they don't exist. Safe to call on every startup."""
-    with _conn() as conn:
-        with conn.cursor() as cur:
+    try:
+        with _conn() as conn:
 
-            # ── engine_orders ──────────────────────────────────────────────
-            cur.execute("""
+            # ── engine_orders ──────────────────────────────────────────────────
+            conn.execute("""
                 CREATE TABLE IF NOT EXISTS engine_orders (
-                    id              SERIAL PRIMARY KEY,
+                    id              INTEGER PRIMARY KEY AUTOINCREMENT,
                     timestamp       TEXT    NOT NULL,
                     strategy        TEXT    NOT NULL DEFAULT '',
                     symbol          TEXT    NOT NULL,
@@ -117,7 +134,7 @@ def init_tables() -> None:
                     sq_off          REAL    DEFAULT 0,
                     stoploss        REAL    DEFAULT 0,
                     trailing_sl     REAL    DEFAULT 0,
-                    mode            TEXT    NOT NULL,
+                    mode            TEXT    NOT NULL DEFAULT 'PAPER',
                     order_id        TEXT    DEFAULT '',
                     status          TEXT    DEFAULT 'OPEN',
                     fill_price      REAL    DEFAULT 0,
@@ -128,10 +145,10 @@ def init_tables() -> None:
                 )
             """)
 
-            # ── strategy_trades ────────────────────────────────────────────
-            cur.execute("""
+            # ── strategy_trades ────────────────────────────────────────────────
+            conn.execute("""
                 CREATE TABLE IF NOT EXISTS strategy_trades (
-                    id          SERIAL PRIMARY KEY,
+                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
                     timestamp   TEXT    NOT NULL,
                     strategy    TEXT    NOT NULL,
                     symbol      TEXT    NOT NULL,
@@ -144,10 +161,10 @@ def init_tables() -> None:
                 )
             """)
 
-            # ── sl_positions ───────────────────────────────────────────────
-            cur.execute("""
+            # ── sl_positions ───────────────────────────────────────────────────
+            conn.execute("""
                 CREATE TABLE IF NOT EXISTS sl_positions (
-                    id              SERIAL PRIMARY KEY,
+                    id              INTEGER PRIMARY KEY AUTOINCREMENT,
                     symbol          TEXT    NOT NULL,
                     exchange        TEXT    NOT NULL DEFAULT 'NSE',
                     action          TEXT    NOT NULL,
@@ -163,10 +180,10 @@ def init_tables() -> None:
                 )
             """)
 
-            # ── trade_journal ──────────────────────────────────────────────
-            cur.execute("""
+            # ── trade_journal ──────────────────────────────────────────────────
+            conn.execute("""
                 CREATE TABLE IF NOT EXISTS trade_journal (
-                    id              SERIAL PRIMARY KEY,
+                    id              INTEGER PRIMARY KEY AUTOINCREMENT,
                     date            TEXT    NOT NULL,
                     symbol          TEXT    NOT NULL,
                     setup           TEXT,
@@ -182,85 +199,35 @@ def init_tables() -> None:
                 )
             """)
 
-    print("[DB] ✅ All tables ready in Supabase")
+        log.info("✅ All tables ready (SQLite)")
+
+    except Exception:
+        log.error("init_tables() failed", exc_info=True)
+        raise
 
 
-# ── Migrate from SQLite (run once) ────────────────────────────────────────────
-
-def migrate_from_sqlite(sqlite_path: str | Path | None = None) -> None:
-    """
-    One-time migration: copy all rows from local SQLite → Supabase.
-    Run once from terminal:  python db.py --migrate
-    """
-    import sqlite3 as _sqlite3
-
-    if sqlite_path is None:
-        sqlite_path = Path(__file__).parent / "dashboard.sqlite"
-
-    sqlite_path = Path(sqlite_path)
-    if not sqlite_path.exists():
-        print(f"[Migrate] SQLite file not found: {sqlite_path}")
-        return
-
-    src = _sqlite3.connect(str(sqlite_path))
-    src.row_factory = _sqlite3.Row
-
-    tables = ["engine_orders", "strategy_trades", "sl_positions", "trade_journal"]
-
-    for table in tables:
-        try:
-            rows = src.execute(f"SELECT * FROM {table}").fetchall()
-        except Exception:
-            print(f"[Migrate] Table {table} not found in SQLite — skipping")
-            continue
-
-        if not rows:
-            print(f"[Migrate] {table}: empty — skipping")
-            continue
-
-        cols = [d[0] for d in src.execute(f"SELECT * FROM {table} LIMIT 0").description
-                if d[0] != "id"]  # skip id — PostgreSQL SERIAL generates its own
-
-        placeholders = ", ".join(["%s"] * len(cols))
-        col_names    = ", ".join(cols)
-        sql          = f"INSERT INTO {table} ({col_names}) VALUES ({placeholders}) ON CONFLICT DO NOTHING"
-
-        inserted = 0
-        with _conn() as conn:
-            with conn.cursor() as cur:
-                for row in rows:
-                    values = tuple(row[c] for c in cols)
-                    try:
-                        cur.execute(sql, values)
-                        inserted += 1
-                    except Exception as e:
-                        print(f"[Migrate] Row error in {table}: {e}")
-
-        print(f"[Migrate] {table}: {inserted}/{len(rows)} rows migrated ✅")
-
-    src.close()
-    print("[Migrate] Done!")
+# ── Auto-init on import ───────────────────────────────────────────────────────
+try:
+    init_tables()
+except Exception:
+    log.error("Failed to auto-init tables on import", exc_info=True)
 
 
 # ── CLI ───────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument("--init",    action="store_true", help="Create tables in Supabase")
-    parser.add_argument("--migrate", action="store_true", help="Migrate SQLite → Supabase")
-    parser.add_argument("--test",    action="store_true", help="Test connection")
+    parser.add_argument("--init", action="store_true", help="Create tables")
+    parser.add_argument("--test", action="store_true", help="Test connection")
     args = parser.parse_args()
 
     if args.test:
         try:
-            rows = query("SELECT NOW() AS now")
-            print(f"[DB] ✅ Connected! Server time: {rows[0]['now']}")
+            rows = query("SELECT COUNT(*) AS n FROM engine_orders")
+            print(f"✅ DB connected. engine_orders rows: {rows[0]['n']}")
         except Exception as e:
-            print(f"[DB] ❌ Connection failed: {e}")
+            print(f"❌ DB error: {e}")
 
     if args.init:
         init_tables()
-
-    if args.migrate:
-        init_tables()
-        migrate_from_sqlite()
+        print("✅ Tables created")

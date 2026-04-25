@@ -3,6 +3,10 @@ from __future__ import annotations
 import json
 from datetime import datetime
 from pathlib import Path
+import sys
+sys.path.insert(0, str(__import__('pathlib').Path(__file__).parent.parent))
+from logger import get_logger
+log = get_logger("ST_Paper_Trading")
 
 import pandas as pd
 import streamlit as st
@@ -23,7 +27,8 @@ PORTFOLIO_FILE = Path("paper_portfolio.json")
 def load_trades():
     try:
         return json.loads(PAPER_FILE.read_text()) if PAPER_FILE.exists() else []
-    except:
+    except Exception:
+        log.error("Failed to load trades file", exc_info=True)
         return []
 
 
@@ -37,7 +42,8 @@ def load_portfolio():
             "cash": 100000.0,
             "holdings": {}
         }
-    except:
+    except Exception:
+        log.error("Failed to load portfolio file", exc_info=True)
         return {"cash": 100000.0, "holdings": {}}
 
 
@@ -52,7 +58,8 @@ def get_live_price(symbol: str):
         kite = kd.get_kite()
         q = kite.quote(f"NSE:{symbol}")
         return q[f"NSE:{symbol}"]["last_price"]
-    except:
+    except Exception:
+        log.warning(f"Failed to fetch live price for {symbol}", exc_info=True)
         return None
 
 

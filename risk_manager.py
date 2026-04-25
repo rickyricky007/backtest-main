@@ -19,9 +19,12 @@ from datetime import datetime, time as dtime
 from typing import TYPE_CHECKING
 
 from position_sizer import PositionSizer
+from logger import get_logger
 
 if TYPE_CHECKING:
     from strategies.base_strategy import Signal
+
+log = get_logger("risk_manager")
 
 
 class RiskManager:
@@ -77,7 +80,7 @@ class RiskManager:
             self._order_count  = 0
             self._signal_keys  = set()
             self._last_reset   = today
-            print(f"[RiskManager] Daily reset for {today}")
+            log.info(f"Daily reset for {today}")
 
     # ── Main gate ─────────────────────────────────────────────────────────────
 
@@ -86,47 +89,54 @@ class RiskManager:
         Returns (approved, reason).
         Call before placing any order.
         """
-        self._maybe_reset()
-        now = datetime.now().time()
+        try:
+            self._maybe_reset()
+            now = datetime.now().time()
 
-        # EXIT signals always pass (must be able to close positions)
-        if signal.action in ("EXIT", "EXIT_SHORT") and self.allow_exit_after:
-            return True, "EXIT — always approved"
+            # EXIT signals always pass (must be able to close positions)
+            if signal.action in ("EXIT", "EXIT_SHORT") and self.allow_exit_after:
+                return True, "EXIT — always approved"
 
-        # Market hours
-        if not (self.market_open <= now <= self.market_close):
-            return False, f"Outside market hours ({self.market_open}–{self.market_close})"
+            # Market hours
+            if not (self.market_open <= now <= self.market_close):
+                return False, f"Outside market hours ({self.market_open}–{self.market_close})"
 
-        # Daily loss limit
-        if self._daily_pnl <= -abs(self.max_daily_loss):
-            return False, f"Daily loss limit hit (₹{self._daily_pnl:,.0f}). No more trades today."
+            # Daily loss limit
+            if self._daily_pnl <= -abs(self.max_daily_loss):
+                log.warning(f"Daily loss limit hit: ₹{self._daily_pnl:,.0f}")
+                return False, f"Daily loss limit hit (₹{self._daily_pnl:,.0f}). No more trades today."
 
-        # Max orders
-        if self._order_count >= self.max_orders_day:
-            return False, f"Max orders/day reached ({self.max_orders_day})"
+            # Max orders
+            if self._order_count >= self.max_orders_day:
+                return False, f"Max orders/day reached ({self.max_orders_day})"
 
-        # Max positions
-        if (
-            signal.action in ("BUY", "SELL")
-            and signal.symbol not in self._open_positions
-            and len(self._open_positions) >= self.max_positions
-        ):
-            return False, f"Max open positions reached ({self.max_positions})"
+            # Max positions
+            if (
+                signal.action in ("BUY", "SELL")
+                and signal.symbol not in self._open_positions
+                and len(self._open_positions) >= self.max_positions
+            ):
+                return False, f"Max open positions reached ({self.max_positions})"
 
-        # Duplicate signal (same strategy+symbol+action within same minute)
-        key = f"{signal.strategy}_{signal.symbol}_{signal.action}_{datetime.now().strftime('%Y%m%d%H%M')}"
-        if key in self._signal_keys:
-            return False, "Duplicate signal — already fired this minute"
-        self._signal_keys.add(key)
+            # Duplicate signal (same strategy+symbol+action within same minute)
+            key = f"{signal.strategy}_{signal.symbol}_{signal.action}_{datetime.now().strftime('%Y%m%d%H%M')}"
+            if key in self._signal_keys:
+                return False, "Duplicate signal — already fired this minute"
+            self._signal_keys.add(key)
 
-        # Greeks check (for F&O signals)
-        greeks = signal.meta.get("greeks", {})
-        if greeks:
-            approved, reason = self._check_greeks(greeks, signal.action)
-            if not approved:
-                return False, reason
+            # Greeks check (for F&O signals)
+            greeks = signal.meta.get("greeks", {})
+            if greeks:
+                approved, reason = self._check_greeks(greeks, signal.action)
+                if not approved:
+                    log.warning(f"Greeks check failed: {reason}")
+                    return False, reason
 
-        return True, "Approved"
+            return True, "Approved"
+
+        except Exception:
+            log.error("approve() crashed — blocking signal as safety measure", exc_info=True)
+            return False, "RiskManager error — signal blocked for safety"
 
     # ── Position sizing ───────────────────────────────────────────────────────
 
@@ -206,7 +216,9 @@ class RiskManager:
 
     def on_pnl_update(self, pnl_delta: float) -> None:
         self._daily_pnl += pnl_delta
-        print(f"[RiskManager] Daily P&L updated: ₹{self._daily_pnl:+,.0f}")
+        log.info(f"Daily P&L updated: ₹{self._daily_pnl:+,.0f}")
+        if self._daily_pnl <= -abs(self.max_daily_loss):
+            log.critical(f"🔴 DAILY LOSS LIMIT BREACHED: ₹{self._daily_pnl:,.0f} — all trading blocked!")
 
     # ── Full status ───────────────────────────────────────────────────────────
 

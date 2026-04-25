@@ -35,6 +35,9 @@ from datetime import datetime
 from typing import Any
 
 from db import execute, init_tables
+from logger import get_logger
+
+log = get_logger("stop_loss_manager")
 
 
 @dataclass
@@ -115,10 +118,13 @@ class StopLossManager:
             strategy     = strategy,
         )
         self._positions[symbol.upper()] = pos
-        self._log_position(pos)
+        try:
+            self._log_position(pos)
+        except Exception:
+            log.error("Failed to log position to DB", exc_info=True)
 
-        print(
-            f"[SLManager] Registered {action} {qty} {symbol} "
+        log.info(
+            f"Registered {action} {qty} {symbol} "
             f"entry=₹{entry_price} SL=₹{sl_price} "
             f"target={'₹'+str(target_price) if target_price else 'none'} "
             f"trailing={'₹'+str(trailing_sl) if trailing_sl else 'off'}"
@@ -132,65 +138,70 @@ class StopLossManager:
         Call this on every market tick.
         Returns exit reason string if an exit was triggered, else None.
         """
-        symbol = None
-        for key in ("tradingsymbol", "symbol"):
-            symbol = tick.get(key)
-            if symbol:
-                break
+        try:
+            symbol = None
+            for key in ("tradingsymbol", "symbol"):
+                symbol = tick.get(key)
+                if symbol:
+                    break
 
-        if not symbol:
-            return None
+            if not symbol:
+                return None
 
-        symbol = symbol.upper()
-        pos    = self._positions.get(symbol)
+            symbol = symbol.upper()
+            pos    = self._positions.get(symbol)
 
-        if not pos or pos.status != "OPEN":
-            return None
+            if not pos or pos.status != "OPEN":
+                return None
 
-        price = tick.get("last_price") or tick.get("ltp")
-        if not price:
-            return None
+            price = tick.get("last_price") or tick.get("ltp")
+            if not price:
+                return None
 
-        price = float(price)
+            price = float(price)
 
-        # ── Update trailing stop loss ─────────────────────────────────────────
-        if pos.trailing_sl > 0:
-            if pos.action == "BUY" and price > pos.peak_price:
-                pos.peak_price = price
-                new_sl = round(pos.peak_price - pos.trailing_sl, 2)
-                if new_sl > pos.sl_price:
-                    print(f"[SLManager] Trailing SL moved UP: {pos.symbol} SL ₹{pos.sl_price} → ₹{new_sl}")
-                    pos.sl_price = new_sl
+            # ── Update trailing stop loss ─────────────────────────────────────
+            if pos.trailing_sl > 0:
+                if pos.action == "BUY" and price > pos.peak_price:
+                    pos.peak_price = price
+                    new_sl = round(pos.peak_price - pos.trailing_sl, 2)
+                    if new_sl > pos.sl_price:
+                        log.info(f"Trailing SL moved UP: {pos.symbol} SL ₹{pos.sl_price} → ₹{new_sl}")
+                        pos.sl_price = new_sl
 
-            elif pos.action == "SELL" and price < pos.peak_price:
-                pos.peak_price = price
-                new_sl = round(pos.peak_price + pos.trailing_sl, 2)
-                if new_sl < pos.sl_price:
-                    print(f"[SLManager] Trailing SL moved DOWN: {pos.symbol} SL ₹{pos.sl_price} → ₹{new_sl}")
-                    pos.sl_price = new_sl
+                elif pos.action == "SELL" and price < pos.peak_price:
+                    pos.peak_price = price
+                    new_sl = round(pos.peak_price + pos.trailing_sl, 2)
+                    if new_sl < pos.sl_price:
+                        log.info(f"Trailing SL moved DOWN: {pos.symbol} SL ₹{pos.sl_price} → ₹{new_sl}")
+                        pos.sl_price = new_sl
 
-        # ── Check stop loss ───────────────────────────────────────────────────
-        sl_hit = (
-            (pos.action == "BUY"  and price <= pos.sl_price) or
-            (pos.action == "SELL" and price >= pos.sl_price)
-        )
-        if sl_hit:
-            reason = f"Stop loss hit @ ₹{price} (SL=₹{pos.sl_price})"
-            self._exit(pos, price, reason)
-            return reason
-
-        # ── Check target ──────────────────────────────────────────────────────
-        if pos.target_price:
-            target_hit = (
-                (pos.action == "BUY"  and price >= pos.target_price) or
-                (pos.action == "SELL" and price <= pos.target_price)
+            # ── Check stop loss ───────────────────────────────────────────────
+            sl_hit = (
+                (pos.action == "BUY"  and price <= pos.sl_price) or
+                (pos.action == "SELL" and price >= pos.sl_price)
             )
-            if target_hit:
-                reason = f"Target hit @ ₹{price} (target=₹{pos.target_price})"
+            if sl_hit:
+                reason = f"Stop loss hit @ ₹{price} (SL=₹{pos.sl_price})"
                 self._exit(pos, price, reason)
                 return reason
 
-        return None
+            # ── Check target ──────────────────────────────────────────────────
+            if pos.target_price:
+                target_hit = (
+                    (pos.action == "BUY"  and price >= pos.target_price) or
+                    (pos.action == "SELL" and price <= pos.target_price)
+                )
+                if target_hit:
+                    reason = f"Target hit @ ₹{price} (target=₹{pos.target_price})"
+                    self._exit(pos, price, reason)
+                    return reason
+
+            return None
+
+        except Exception:
+            log.error(f"on_tick error for {tick.get('symbol','?')}", exc_info=True)
+            return None
 
     # ── Manual exit ───────────────────────────────────────────────────────────
 
@@ -244,26 +255,32 @@ class StopLossManager:
             exit_action = "BUY"
 
         emoji = "✅" if pnl >= 0 else "❌"
-        print(f"[SLManager] {emoji} EXIT {pos.symbol}: {reason} | P&L: ₹{pnl:+,.2f}")
+        log.info(f"{emoji} EXIT {pos.symbol}: {reason} | P&L: ₹{pnl:+,.2f}")
 
         # Place exit order via OrderManager
         if self._om:
-            self._om.market(
-                symbol   = pos.symbol,
-                action   = exit_action,
-                qty      = pos.qty,
-                exchange = pos.exchange,
-                strategy = pos.strategy,
-                reason   = reason,
-                meta     = {"pnl": pnl, "exit_reason": reason},
-            )
+            try:
+                self._om.market(
+                    symbol   = pos.symbol,
+                    action   = exit_action,
+                    qty      = pos.qty,
+                    exchange = pos.exchange,
+                    strategy = pos.strategy,
+                    reason   = reason,
+                    meta     = {"pnl": pnl, "exit_reason": reason},
+                )
+            except Exception:
+                log.error(f"Failed to place exit order for {pos.symbol}", exc_info=True)
 
         # Update DB
-        execute("""
-            UPDATE sl_positions
-            SET status='EXITED'
-            WHERE symbol=%s AND status='OPEN'
-        """, (pos.symbol,))
+        try:
+            execute("""
+                UPDATE sl_positions
+                SET status='EXITED'
+                WHERE symbol=%s AND status='OPEN'
+            """, (pos.symbol,))
+        except Exception:
+            log.error(f"Failed to update DB for exit {pos.symbol}", exc_info=True)
 
     def _log_position(self, pos: Position) -> None:
         execute("""
