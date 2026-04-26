@@ -46,3 +46,6 @@ backups/
 
 # macOS FUSE temp files
 .fuse_hidden*
+
+# claude notes
+CLAUDE.md
