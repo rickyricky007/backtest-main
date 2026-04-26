@@ -1,5 +1,5 @@
 # Algo Trading System — Project Map
-> Auto-generated on **2026-04-26 10:32** — updates automatically every time the app starts.
+> Auto-generated on **2026-04-26 10:37** — updates automatically every time the app starts.
 
 ---
 
@@ -216,11 +216,11 @@ Navigation: Home → Account → Market → Signals → Trading → Analytics �
 ---
 
 ## Recent git commits
+- f4cc011 feat: wire Telegram alerts, Supabase DB, backups, token monitor, daily report & unit tests
 - 77c1eaa feat: Supabase DB, Telegram alerts, backups, token monitor, daily report, unit tests, page reorganisation
 - ceed084 feat: Charts, Options Chain all F&O, Chatbot upgrade, market intelligence
 - ab31228 Add signal engine (10-indicator confluence) + Signal Scanner dashboard
 - 44f07b5 changes style
-- df2e80e "Fix db.py: switch from PostgreSQL to SQLite, add central logger, fix error handling"
 
 ---
 
