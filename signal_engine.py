@@ -38,6 +38,7 @@ from indicators import score_symbol, score_summary, BUY_THRESHOLD, SELL_THRESHOL
 from logger import get_logger
 from risk_manager import RiskManager
 from order_manager import OrderManager
+from telegram import send_signal
 
 log = get_logger("signal_engine")
 
@@ -281,6 +282,16 @@ class SignalEngine:
                     f"{r['action']} {r['symbol']} @ ₹{r['price']} "
                     f"| Score: {r['score']:+d} | {reason}"
                 )
+
+                # Telegram alert — only for LIVE mode to avoid spam in PAPER
+                if self.mode == "LIVE":
+                    send_signal(
+                        symbol=r["symbol"],
+                        action=r["action"],
+                        score=r["score"],
+                        price=r["price"],
+                        mode=self.mode,
+                    )
 
             except Exception:
                 log.error(f"Failed to execute signal for {r['symbol']}", exc_info=True)

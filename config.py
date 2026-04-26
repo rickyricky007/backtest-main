@@ -48,6 +48,24 @@ class _Config:
     def telegram_chat_id(self) -> str:
         return _get("TELEGRAM_CHAT_ID")
 
+    # ── Supabase ──────────────────────────────────────────────────────────────
+    @property
+    def supabase_url(self) -> str:
+        return _get("SUPABASE_URL")
+
+    @property
+    def supabase_key(self) -> str:
+        """Secret key — used for Storage uploads and server-side operations."""
+        return _get("SUPABASE_KEY")
+
+    @property
+    def supabase_publishable_key(self) -> str:
+        return _get("SUPABASE_PUBLISHABLE_KEY")
+
+    @property
+    def database_url(self) -> str:
+        return _get("DATABASE_URL")
+
     # ── Anthropic ─────────────────────────────────────────────────────────────
     @property
     def anthropic_api_key(self) -> str:
@@ -67,6 +85,9 @@ class _Config:
             "telegram_token":   "✅ set" if self.telegram_bot_token else "❌ missing",
             "telegram_chat_id": "✅ set" if self.telegram_chat_id else "❌ missing",
             "anthropic_key":    "✅ set" if self.anthropic_api_key else "❌ missing",
+            "supabase_url":     "✅ set" if self.supabase_url else "❌ missing",
+            "supabase_key":     "✅ set" if self.supabase_key else "❌ missing",
+            "database_url":     "✅ set" if self.database_url else "❌ missing",
         }
 
 

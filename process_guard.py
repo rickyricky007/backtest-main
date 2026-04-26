@@ -33,6 +33,7 @@ from pathlib import Path
 
 import requests
 from config import cfg
+from telegram import send_startup, send_crash
 
 # ── Config ────────────────────────────────────────────────────────────────────
 BASE_DIR  = Path(__file__).parent
@@ -60,6 +61,18 @@ SERVICES = {
         "log":      LOG_DIR / "ticker.log",
         "max_restarts": 20,
         "restart_delay": 3,
+    },
+    "token_monitor": {
+        "cmd":      [PYTHON, str(BASE_DIR / "token_monitor.py"), "--loop"],
+        "log":      LOG_DIR / "token_monitor.log",
+        "max_restarts": 20,
+        "restart_delay": 10,
+    },
+    "daily_report": {
+        "cmd":      [PYTHON, str(BASE_DIR / "daily_report.py"), "--loop"],
+        "log":      LOG_DIR / "daily_report.log",
+        "max_restarts": 5,
+        "restart_delay": 30,
     },
 }
 
@@ -139,6 +152,7 @@ def _monitor_loop(services_to_run: list[str]) -> None:
 
     _log(f"🐕 Watchdog active — monitoring: {', '.join(services_to_run)}")
     _alert(f"🚀 *Watchdog started*\nMonitoring: {', '.join(services_to_run)}")
+    send_startup(services_to_run)
 
     while _running:
         for name in services_to_run:
@@ -159,6 +173,7 @@ def _monitor_loop(services_to_run: list[str]) -> None:
                     f"Exit code: {ret}\n"
                     f"Restarting in {delay:.0f}s (attempt #{_crash_counts[name]})"
                 )
+                send_crash(service=name, error=f"exit={ret}", attempt=_crash_counts[name])
 
                 if _crash_counts[name] > svc["max_restarts"]:
                     _log(f"❌ '{name}' crashed too many times ({_crash_counts[name]}x). Giving up.")

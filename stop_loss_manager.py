@@ -36,6 +36,7 @@ from typing import Any
 
 from db import execute, init_tables
 from logger import get_logger
+from telegram import send_sl_hit
 
 log = get_logger("stop_loss_manager")
 
@@ -256,6 +257,7 @@ class StopLossManager:
 
         emoji = "✅" if pnl >= 0 else "❌"
         log.info(f"{emoji} EXIT {pos.symbol}: {reason} | P&L: ₹{pnl:+,.2f}")
+        send_sl_hit(symbol=pos.symbol, trigger_price=exit_price, pnl=pnl)
 
         # Place exit order via OrderManager
         if self._om:

@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING
 
 from position_sizer import PositionSizer
 from logger import get_logger
+from telegram import send_risk_breach
 
 if TYPE_CHECKING:
     from strategies.base_strategy import Signal
@@ -103,7 +104,12 @@ class RiskManager:
 
             # Daily loss limit
             if self._daily_pnl <= -abs(self.max_daily_loss):
-                log.warning(f"Daily loss limit hit: ₹{self._daily_pnl:,.0f}")
+                log.critical(f"Daily loss limit hit: ₹{self._daily_pnl:,.0f}")
+                send_risk_breach(
+                    reason="Daily loss limit breached",
+                    daily_loss=self._daily_pnl,
+                    limit=self.max_daily_loss,
+                )
                 return False, f"Daily loss limit hit (₹{self._daily_pnl:,.0f}). No more trades today."
 
             # Max orders

@@ -329,31 +329,140 @@ def read_uploaded_file(uploaded_file) -> str:
 
 def build_system_context(auto_read: bool, uploaded_files, snapshot: dict) -> str:
     ctx = """You are an expert AI trading assistant built into Ricky's algo trading platform.
+You have COMPLETE knowledge of every part of this system. Never say you don't have access to
+configuration details — all facts are listed below.
 
-PRODUCT KNOWLEDGE — you have full access to this system:
-- Signal Scanner: 10-indicator confluence engine (RSI, MACD, BB, Supertrend, EMA, VWAP, Volume, ADX, Stochastic, OI)
-- Score range -15 to +15 | BUY ≥ +6 | SELL ≤ -6
-- Universe: 6 F&O indices + ~180 F&O stocks
-- Strategy Hub: RSI, SMA, VWAP, ORB, Short Straddle, Short Strangle, Long Straddle strategies
-- Options Chain: live IV, Greeks, OI, PCR, max pain
-- F&O Dashboard: IV rank, expiry calendar, portfolio Greeks
-- Backtest Lab: walk-forward validation, parameter optimisation
-- Trade Journal: personal diary with analytics
-- Risk Manager: daily loss limits, max positions, Greeks exposure
-- Order Manager: PAPER and LIVE modes, 6 order types, slippage model
-- Stop Loss Manager: trailing SL, target exits
+════════════════════════════════════════════════════════
+SYSTEM IDENTITY
+════════════════════════════════════════════════════════
+Owner       : Ricky
+Broker      : Zerodha (KiteConnect API)
+Exchange    : NSE / BSE / NFO (F&O)
+Platform    : Streamlit dashboard (localhost:8501)
+Language    : Python 3
+Database    : dashboard.sqlite  (SQLite, WAL mode)
+DB Tables   : engine_orders | strategy_trades | sl_positions | trade_journal
+Config file : config.py  (imports from .env)
+Logger      : logger.py  → get_logger("module_name")
+Start cmd   : streamlit run app.py
+Auth cmd    : python generate_token.py <request_token>   ← run ONCE every morning
 
-RULES:
+════════════════════════════════════════════════════════
+ENVIRONMENT VARIABLES (.env)
+════════════════════════════════════════════════════════
+API_KEY / KITE_API_KEY          → Zerodha API key
+API_SECRET / KITE_API_SECRET    → Zerodha API secret
+TELEGRAM_TOKEN / TELEGRAM_BOT_TOKEN → Telegram bot
+TELEGRAM_CHAT_ID                → Telegram chat ID
+ANTHROPIC_API_KEY               → Claude AI key (this chatbot)
+
+════════════════════════════════════════════════════════
+ALL 18 DASHBOARD PAGES
+════════════════════════════════════════════════════════
+1.  Holdings          → Full holdings table, invested vs current, P&L export
+2.  Positions         → Net vs intraday positions, live P&L
+3.  Funds             → Available cash, margins, collateral breakdown
+4.  Historical Data   → Fetch OHLCV from Kite, display chart + table
+5.  Strategy Hub      → Run/stop all strategies, PAPER/LIVE toggle per strategy
+6.  Chatbot           → This AI assistant (YOU)
+7.  ST Paper Trading  → Stock paper trading simulator
+8.  FO Paper Trading  → F&O paper trading with real Kite prices
+9.  RSI Strategy      → Multi-timeframe RSI scanner (5m + 15m confluence)
+10. SMA Strategy      → SMA crossover signals
+11. Options Chain     → ALL F&O indices + 180 stocks, IV, Greeks, PCR, OI chart, straddle launcher
+12. FO Dashboard      → IV rank, expiry calendar, portfolio Greeks
+13. Strategy PnL      → Historical P&L per strategy with charts
+14. Trade Journal     → Manual trade diary with setup tags and analytics
+15. System Status     → Service health, logs, DB stats, process monitor
+16. Backtest          → Walk-forward backtesting, parameter optimisation
+17. Signal Scanner    → Live multi-symbol confluence scanner, BUY/SELL/WAIT
+18. Charts            → Plotly interactive charts, any F&O symbol, multi-timeframe
+
+════════════════════════════════════════════════════════
+SIGNAL SCORING SYSTEM (indicators.py)
+════════════════════════════════════════════════════════
+10 indicators — each returns +weight, -weight, or 0:
+  RSI (weight 2)          → <30 BUY, >70 SELL
+  MACD (weight 2)         → crossover direction
+  Bollinger Bands (wt 2)  → price vs bands
+  Supertrend (weight 2)   → trend direction
+  EMA Crossover (wt 2)    → 9 EMA vs 21 EMA
+  VWAP (weight 1)         → price above/below VWAP
+  Volume Spike (weight 1) → >1.5x average volume
+  ADX (weight 1)          → trend strength >25
+  Stochastic (weight 1)   → <20 BUY, >80 SELL
+  OI Change (weight 1)    → open interest direction
+
+Score range : -15 to +15
+BUY signal  : score ≥ +6
+SELL signal : score ≤ -6
+WAIT        : between -6 and +6
+
+════════════════════════════════════════════════════════
+F&O UNIVERSE (fo_symbols.py)
+════════════════════════════════════════════════════════
+Indices (6) : NIFTY 50, BANK NIFTY, FINNIFTY, MIDCAP NIFTY, SENSEX, BANKEX
+Stocks      : ~180 NSE F&O stocks across sectors
+Top 50 liquid stocks used for fast scans
+All symbols imported from fo_symbols.py — single source of truth
+
+════════════════════════════════════════════════════════
+EXECUTION LAYER
+════════════════════════════════════════════════════════
+PAPER mode  → logs to engine_orders table, no real order sent
+LIVE mode   → real KiteConnect API order, also logged to DB
+Toggle      → one switch at OrderManager level — no code change needed
+Order types → market, limit, SL, SL-M, bracket, cover
+Risk checks → daily loss limit, max positions, Greeks exposure
+Stop Loss   → trailing SL and target exits via stop_loss_manager.py
+
+════════════════════════════════════════════════════════
+KEY FILES
+════════════════════════════════════════════════════════
+app.py              → main Streamlit entry point
+kite_data.py        → Kite API helpers, token loading
+config.py           → centralised env var loader
+generate_token.py   → morning auth — run once per day
+ticker_service.py   → WebSocket live prices → ticker_data.json
+signal_engine.py    → multi-symbol confluence scanner
+indicators.py       → 10-indicator scoring functions
+fo_symbols.py       → complete F&O symbol registry
+market_intelligence.py → OI analysis, expiry alerts, manipulation detection
+order_manager.py    → paper + live order routing
+risk_manager.py     → daily loss / position limits
+stop_loss_manager.py → trailing SL / targets
+db.py               → SQLite helpers (execute, query, read_df)
+logger.py           → central rotating logger
+update_docs.py      → auto-regenerates CLAUDE.md
+
+════════════════════════════════════════════════════════
+MARKET INTELLIGENCE
+════════════════════════════════════════════════════════
+OI signals  → Long Buildup | Short Buildup | Short Covering | Long Unwinding
+Max Pain    → strike where total option buyer loss is maximum (price gravitates here on expiry)
+PCR         → Put-Call Ratio: >1.5 extreme fear | <0.5 extreme greed
+Manipulation signals → volume spike >3x, OI spike no price move, expiry day traps
+Expiry      → NSE weekly (every Thursday) | monthly (last Thursday of month)
+
+════════════════════════════════════════════════════════
+GLOBAL MARKET SESSIONS (all times IST)
+════════════════════════════════════════════════════════
+NSE/BSE     → 09:15 – 15:30 IST
+SGX Nifty   → 06:30 – 23:00 IST
+London LSE  → 13:30 – 22:00 IST
+NYSE/NASDAQ → 19:00 – 01:30 IST (approx)
+Tokyo TSE   → 05:30 – 11:30 IST
+
+════════════════════════════════════════════════════════
+RULES FOR YOUR RESPONSES
+════════════════════════════════════════════════════════
 - Always use ₹ for Indian Rupees
-- Be concise and actionable
-- If Kite not connected, say clearly and suggest running generate_token.py
-- For market timing questions, use the session data provided
-- For trade advice, always mention risk management
-
-DASHBOARD PAGES AVAILABLE:
-Holdings | Positions | Funds | Historical Data | Strategy Hub | Chatbot |
-ST Paper Trading | FO Paper Trading | Options Chain | FO Dashboard |
-Strategy PnL | Trade Journal | System Status | Backtest | Signal Scanner
+- Be concise, specific and actionable
+- NEVER say "I don't have access to config" — all config facts are above
+- If Kite not connected → tell user to run: python generate_token.py <request_token>
+- For trade advice → always mention risk management and position sizing
+- For DB questions → database name is dashboard.sqlite, 4 tables listed above
+- For page questions → refer to the 18 pages listed above by name
 
 """
     ctx += build_market_context(snapshot)
@@ -383,6 +492,96 @@ def get_direct_live_reply(prompt: str, snapshot: dict) -> str | None:
         "position", "positions", "nifty", "bank nifty", "sensex", "gift nifty",
         "fin nifty", "midcap", "index", "indices", "portfolio",
     ]
+
+    # ── Project knowledge — instant answers, no Claude token needed ──────────
+    if any(k in q for k in ["database", "db name", "database name", "sqlite", "what db", "which db"]):
+        return (
+            "🗄️ **Database:** `dashboard.sqlite` (SQLite, WAL mode)\n\n"
+            "**4 tables:**\n"
+            "- `engine_orders` — all paper + live orders with fill info\n"
+            "- `strategy_trades` — strategy signal log with P&L\n"
+            "- `sl_positions` — active stop-loss positions\n"
+            "- `trade_journal` — manual trade diary entries\n\n"
+            "Located in `backtest-main/dashboard.sqlite`"
+        )
+
+    if any(k in q for k in ["how many page", "all page", "list page", "what page", "dashboard page"]):
+        return (
+            "📋 **18 Dashboard Pages:**\n\n"
+            "1. Holdings  2. Positions  3. Funds  4. Historical Data\n"
+            "5. Strategy Hub  6. Chatbot (you're here)  7. ST Paper Trading\n"
+            "8. FO Paper Trading  9. RSI Strategy  10. SMA Strategy\n"
+            "11. Options Chain  12. FO Dashboard  13. Strategy PnL\n"
+            "14. Trade Journal  15. System Status  16. Backtest\n"
+            "17. Signal Scanner  18. Charts"
+        )
+
+    if "scoring" in q or ("score" in q and "indicator" in q) or "confluence" in q or "buy threshold" in q or "sell threshold" in q:
+        return (
+            "📊 **Signal Scoring System (10 indicators):**\n\n"
+            "RSI (±2) | MACD (±2) | Bollinger Bands (±2) | Supertrend (±2) | EMA Cross (±2)\n"
+            "VWAP (±1) | Volume Spike (±1) | ADX (±1) | Stochastic (±1) | OI Change (±1)\n\n"
+            "**Score range:** -15 to +15\n"
+            "🟢 **BUY** ≥ +6  |  🔴 **SELL** ≤ -6  |  ⚪ **WAIT** between -6 and +6"
+        )
+
+    if any(k in q for k in ["how to start", "start the app", "run the app", "how to run", "startup"]):
+        return (
+            "🚀 **How to start:**\n\n"
+            "```bash\n"
+            "cd backtest-main\n"
+            "source venv/bin/activate\n"
+            "python generate_token.py <request_token>   # once per morning\n"
+            "python ticker_service.py                   # live WebSocket prices\n"
+            "streamlit run app.py                       # dashboard\n"
+            "```\n"
+            "Or: `python process_guard.py` starts everything at once."
+        )
+
+    if any(k in q for k in ["paper mode", "live mode", "switch mode", "paper vs live", "paper trade vs"]):
+        return (
+            "📄 **PAPER vs LIVE:**\n\n"
+            "- **PAPER** → logs to `engine_orders` table, no real money\n"
+            "- **LIVE** → real KiteConnect API order + logged to DB\n\n"
+            "One toggle switch in Signal Scanner or Strategy Hub. No code changes needed."
+        )
+
+    if any(k in q for k in ["f&o universe", "how many stocks", "all symbols", "fo stocks", "symbol universe"]):
+        return (
+            "📈 **F&O Universe:**\n\n"
+            "**Indices (6):** NIFTY 50, BANK NIFTY, FINNIFTY, MIDCAP NIFTY, SENSEX, BANKEX\n"
+            "**Stocks:** ~180 NSE F&O stocks\n"
+            "**Top 50 Liquid** used for fast scans\n\n"
+            "All from `fo_symbols.py` — single source of truth."
+        )
+
+    if any(k in q for k in ["expiry", "weekly expiry", "monthly expiry", "days to expiry", "dte"]):
+        try:
+            from market_intelligence import expiry_alert
+            exp = expiry_alert()
+            msg = (
+                f"📅 **Expiry Info:**\n\n"
+                f"- Weekly:  **{exp['weekly_expiry']}** ({exp['dte_weekly']} days)\n"
+                f"- Monthly: **{exp['monthly_expiry']}** ({exp['dte_monthly']} days)\n"
+            )
+            if exp["alerts"]:
+                msg += "\n**Alerts:**\n" + "\n".join(exp["alerts"])
+            return msg
+        except Exception:
+            pass
+
+    if any(k in q for k in ["market open", "is market open", "market status", "market time", "session status", "nse open"]):
+        try:
+            from market_intelligence import market_session_status
+            sess = market_session_status()
+            icon = "🟢" if sess["nse_open"] else "🔴"
+            lines = [f"🌍 **Market Sessions** — {sess['ist_time']}\n",
+                     f"{icon} NSE: **{sess['nse_phase']}**\n"]
+            for s in sess["sessions"]:
+                lines.append(f"- {s['market']}: {s['status']}")
+            return "\n".join(lines)
+        except Exception:
+            pass
 
     if not snapshot.get("connected"):
         if any(k in q for k in live_keywords):

@@ -43,3 +43,6 @@ backups/
 
 # Streamlit secrets
 .streamlit/secrets.toml
+
+# macOS FUSE temp files
+.fuse_hidden*
