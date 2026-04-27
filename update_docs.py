@@ -324,6 +324,9 @@ Navigation: Home → Account → Market → Signals → Trading → Analytics �
 - 2026-04-27 | Built `breeze_data.py` — Breeze primary data source: historical, F&O, live quotes, session mgmt
 - 2026-04-27 | Breeze strategy: primary data source (free, 3yr history, 1sec), Kite only for trading/orders
 - 2026-04-27 | Breeze must run from VPS (IP enforced) — test tomorrow when SSH fixed
+- 2026-04-27 | Built `data_manager.py` — unified data layer: Breeze primary, Kite fallback, yfinance last resort
+- 2026-04-27 | Upgraded `pages/2_Market/1_Historical_Data.py` — Breeze+Kite dual source, added F&O historical tab
+- 2026-04-27 | Upgraded `signal_engine.py` — _fetch_ohlcv now uses data_manager (Breeze→Kite→yfinance)
 
 ---
 

@@ -55,28 +55,16 @@ DEFAULT_SYMBOLS = list(FO_INDICES.keys()) + TOP_50_LIQUID
 def _fetch_ohlcv(symbol: str, interval: str = "15m", days: int = 5) -> dict | None:
     """
     Fetch OHLCV data for a symbol.
+    Priority: Breeze → Kite → yfinance (15-min delay)
     Returns dict with keys: closes, highs, lows, volumes
     Returns None if data unavailable.
     """
     try:
-        import yfinance as yf
-        ticker = get_yf_ticker(symbol)
-        df = yf.Ticker(ticker).history(period=f"{days}d", interval=interval)
-
-        if df.empty or len(df) < 30:
-            return None
-
-        # Flatten multi-level columns if present
-        if hasattr(df.columns, "levels"):
-            df.columns = df.columns.get_level_values(0)
-
-        return {
-            "closes":  df["Close"].dropna().tolist(),
-            "highs":   df["High"].dropna().tolist(),
-            "lows":    df["Low"].dropna().tolist(),
-            "volumes": df["Volume"].dropna().tolist(),
-        }
-
+        import data_manager as dm
+        data = dm.get_ohlcv_for_signal(symbol, interval=interval, days=days)
+        if data:
+            log.debug(f"[{dm.data_source()}] {symbol} — {len(data['closes'])} candles")
+        return data
     except Exception:
         log.warning(f"Failed to fetch OHLCV for {symbol}", exc_info=False)
         return None
