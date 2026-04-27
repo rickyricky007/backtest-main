@@ -24,6 +24,8 @@ check_service() {
 
 check_service "Streamlit Dashboard" "algotrading-dashboard"
 check_service "Token Monitor"       "algotrading-token"
+check_service "Live Ticker (Kite)"  "algotrading-ticker"
+check_service "Breeze Monitor"      "algotrading-breeze"
 check_service "Scheduler"           "algotrading-scheduler"
 check_service "Process Guard"       "algotrading-guard"
 check_service "Nginx"               "nginx"

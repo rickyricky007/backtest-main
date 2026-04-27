@@ -208,6 +208,27 @@ StandardError=journal
 WantedBy=multi-user.target
 SVCFILE
 
+# Live Ticker service (Kite WebSocket — real-time prices)
+cat > /etc/systemd/system/algotrading-ticker.service << SVCFILE
+[Unit]
+Description=AlgoTrading Live Ticker (Kite WebSocket)
+After=network.target algotrading-dashboard.service
+
+[Service]
+Type=simple
+User=$SERVICE_USER
+WorkingDirectory=$APP_DIR/app
+Environment=PATH=$APP_DIR/app/venv/bin
+ExecStart=$APP_DIR/app/venv/bin/python ticker_service.py
+Restart=always
+RestartSec=30
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+SVCFILE
+
 log "Systemd services created"
 
 # ── 9. Enable and start services ──────────────────────────────────────────────
@@ -215,6 +236,7 @@ info "Enabling services..."
 systemctl daemon-reload
 systemctl enable algotrading-dashboard
 systemctl enable algotrading-token
+systemctl enable algotrading-ticker
 systemctl enable algotrading-scheduler
 systemctl enable algotrading-guard
 log "Services enabled (auto-start on reboot)"
@@ -260,8 +282,9 @@ sleep 3
 systemctl start algotrading-scheduler
 systemctl start algotrading-guard
 
-# Don't start token monitor yet — needs .env filled first
-warn "Token monitor NOT started — fill .env first"
+# Don't start token monitor or ticker yet — needs .env filled first
+warn "Token monitor + Ticker NOT started — fill .env and generate Kite token first"
+warn "After filling .env run: systemctl start algotrading-token algotrading-ticker"
 
 # ── Done ───────────────────────────────────────────────────────────────────────
 VPS_IP=$(curl -s ifconfig.me 2>/dev/null || echo "your-vps-ip")

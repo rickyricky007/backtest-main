@@ -37,6 +37,56 @@ st.caption("Ask me anything about your trading data!")
 auth.render_auth_cleared_banner()
 
 
+# ── Global market helpers ─────────────────────────────────────────────────────
+
+def _gift_nifty_symbol() -> str:
+    """Return active GIFT Nifty futures symbol — switches to next month after expiry."""
+    import calendar
+    month_map = {
+        1:"JAN",2:"FEB",3:"MAR",4:"APR",5:"MAY",6:"JUN",
+        7:"JUL",8:"AUG",9:"SEP",10:"OCT",11:"NOV",12:"DEC"
+    }
+    now   = datetime.now()
+    year  = now.year
+    month = now.month
+    # Last Thursday of current month
+    last_thu = max(
+        w[3] for w in calendar.monthcalendar(year, month) if w[3] != 0
+    )
+    # After expiry — use next month
+    if now.day > last_thu:
+        month += 1
+        if month > 12:
+            month = 1
+            year += 1
+    return f"NSE_IFSC:NIFTY{str(year)[2:]}{month_map[month]}FUT"
+
+
+def get_global_market_data() -> dict:
+    """Fetch US futures, SGX Nifty proxy, Gold, Crude via yfinance."""
+    result = {}
+    try:
+        import yfinance as yf
+        targets = {
+            "S&P 500 Futures":    "ES=F",
+            "Nasdaq Futures":     "NQ=F",
+            "Dow Futures":        "YM=F",
+            "Crude Oil (WTI)":    "CL=F",
+            "Gold":               "GC=F",
+            "SGX Nifty (proxy)":  "^NSEI",
+        }
+        for name, sym in targets.items():
+            try:
+                hist  = yf.Ticker(sym).history(period="1d", interval="1m")
+                price = float(hist["Close"].iloc[-1]) if not hist.empty else None
+                result[name] = {"symbol": sym, "price": price}
+            except Exception:
+                result[name] = {"symbol": sym, "price": None}
+    except ImportError:
+        result["error"] = "yfinance not installed — run: pip install yfinance"
+    return result
+
+
 # ── Kite client — auto-built from saved token, no manual login needed ────────
 def get_kite_client():
     """
@@ -87,13 +137,14 @@ def fmt_money(v) -> str:
 
 def get_live_snapshot() -> dict:
     snapshot = {
-        "connected": False,
-        "error": None,
-        "indices": {},
-        "gift_nifty": {},
-        "funds": {},
-        "holdings": [],
-        "positions": {"day": [], "net": [], "open": []},
+        "connected":     False,
+        "error":         None,
+        "indices":       {},
+        "gift_nifty":    {},
+        "global_market": get_global_market_data(),
+        "funds":         {},
+        "holdings":      [],
+        "positions":     {"day": [], "net": [], "open": []},
     }
 
     kite = get_kite_client()
@@ -121,18 +172,13 @@ def get_live_snapshot() -> dict:
         snapshot["indices_error"] = str(e)
         st.sidebar.warning(f"⚠️ Indices: {e}")
 
-    # GIFT Nifty
+    # GIFT Nifty — dynamic expiry (switches to next month after last Thursday)
     try:
-        now = datetime.now()
-        month_map = {
-            1:"JAN", 2:"FEB", 3:"MAR", 4:"APR", 5:"MAY", 6:"JUN",
-            7:"JUL", 8:"AUG", 9:"SEP", 10:"OCT", 11:"NOV", 12:"DEC"
-        }
-        gift_symbol = f"NSE_IFSC:NIFTY{now.strftime('%y')}{month_map[now.month]}FUT"
-        gift_ltp = kite.ltp([gift_symbol])
+        gift_symbol = _gift_nifty_symbol()
+        gift_ltp    = kite.ltp([gift_symbol])
         snapshot["gift_nifty"] = {
             "symbol": gift_symbol,
-            "price": gift_ltp.get(gift_symbol, {}).get("last_price"),
+            "price":  gift_ltp.get(gift_symbol, {}).get("last_price"),
         }
     except Exception as e:
         snapshot["gift_nifty_error"] = str(e)
@@ -216,6 +262,14 @@ def build_market_context(snapshot: dict) -> str:
     gift = snapshot.get("gift_nifty", {})
     if gift.get("price") is not None:
         ctx += f"- GIFT Nifty: {fmt_money(gift['price'])} ({gift.get('symbol')})\n"
+
+    global_mkt = snapshot.get("global_market", {})
+    if global_mkt and "error" not in global_mkt:
+        ctx += "\n🌍 Global Markets (via yfinance):\n"
+        for name, d in global_mkt.items():
+            price = d.get("price")
+            if price:
+                ctx += f"- {name}: {price:,.2f}\n"
 
     funds = snapshot.get("funds", {})
     if funds:
@@ -652,6 +706,50 @@ def get_direct_live_reply(prompt: str, snapshot: dict) -> str | None:
             if price
             else f"📈 **GIFT Nifty**: Unavailable\nSymbol tried: `{symbol}`"
         )
+
+    # ── Global market direct replies ──────────────────────────────────────────
+    global_mkt = snapshot.get("global_market", {})
+
+    def _gval(name: str) -> str:
+        d = global_mkt.get(name, {})
+        p = d.get("price")
+        return f"{p:,.2f}" if p else "Unavailable"
+
+    if any(k in q for k in ["us futures", "us market", "s&p", "sp500", "s&p 500", "/es", "es=f"]):
+        return (
+            f"🇺🇸 **US Futures**\n\n"
+            f"- S&P 500 Futures : {_gval('S&P 500 Futures')}\n"
+            f"- Nasdaq Futures  : {_gval('Nasdaq Futures')}\n"
+            f"- Dow Futures     : {_gval('Dow Futures')}\n\n"
+            f"_Source: yfinance (15-min delay)_"
+        )
+
+    if any(k in q for k in ["crude", "oil", "cl=f", "wti"]):
+        return f"🛢️ **Crude Oil (WTI)**: {_gval('Crude Oil (WTI)')}\n_Source: yfinance_"
+
+    if any(k in q for k in ["gold", "gc=f", "xau"]):
+        return f"🥇 **Gold**: {_gval('Gold')}\n_Source: yfinance_"
+
+    if any(k in q for k in ["sgx", "sgx nifty", "singapore nifty"]):
+        return (
+            f"📈 **SGX Nifty (proxy — Nifty 50 index)**: {_gval('SGX Nifty (proxy)')}\n\n"
+            f"_Note: True SGX Nifty requires a Singapore broker feed. "
+            f"This uses NSE Nifty 50 as a close proxy._"
+        )
+
+    if any(k in q for k in ["nasdaq", "nq=f", "/nq"]):
+        return f"📊 **Nasdaq Futures**: {_gval('Nasdaq Futures')}\n_Source: yfinance_"
+
+    if any(k in q for k in ["dow", "ym=f", "/ym"]):
+        return f"📊 **Dow Futures**: {_gval('Dow Futures')}\n_Source: yfinance_"
+
+    if any(k in q for k in ["global market", "world market", "international"]):
+        lines = ["🌍 **Global Markets**\n"]
+        for name, d in global_mkt.items():
+            p = d.get("price")
+            lines.append(f"- {name}: {p:,.2f}" if p else f"- {name}: Unavailable")
+        lines.append("\n_Source: yfinance (15-min delay)_")
+        return "\n".join(lines)
 
     if "bank nifty" in q:
         return f"📈 **Bank Nifty**: {fmt_money(indices.get('BANK NIFTY'))}"

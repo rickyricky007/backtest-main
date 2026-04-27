@@ -4,6 +4,8 @@
 echo "Restarting all services..."
 systemctl restart algotrading-dashboard
 systemctl restart algotrading-token
+systemctl restart algotrading-ticker
+systemctl restart algotrading-breeze
 systemctl restart algotrading-scheduler
 systemctl restart algotrading-guard
 systemctl restart nginx
