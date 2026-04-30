@@ -262,7 +262,7 @@ cmd_cols = st.columns(2)
 for i, (label, cmd) in enumerate(cmds.items()):
     with cmd_cols[i % 2]:
         st.markdown(f"**{label}**")
-        st.code(f"cd backtest-main && {cmd}", language="bash")
+        st.code(f"cd ~/algo_trading/'ricky 1' && {cmd}", language="bash")
 
 st.divider()
 

@@ -182,7 +182,7 @@ A production-grade algorithmic trading system built on Zerodha Kite API + Stream
 
 ## How to start every session
 ```bash
-cd ~/algo_trading/backtest-main
+cd ~/algo_trading/"ricky 1"
 source venv/bin/activate
 
 # Step 1 — get login URL, open in browser, copy request_token from redirect URL
@@ -312,15 +312,15 @@ Navigation: Home → Account → Market → Signals → Trading → Analytics �
 - 2026-04-26 | Updated `process_guard.py` — added token_monitor and daily_report as managed services
 - 2026-04-26 | Built `tests/test_indicators.py` — 15 unit tests covering RSI, EMA, volume spike, score_symbol
 - 2026-04-26 | Built `tests/test_risk_manager.py` — 14 unit tests covering all risk gates (loss limit, positions, Greeks, hours)
-- 2026-04-27 | VPS deployed — AWS t3.micro, Mumbai (ap-south-1), IP 13.206.86.130, Ubuntu 22.04 LTS
+- 2026-04-27 | VPS deployed — AWS t3.micro, Mumbai (ap-south-1), IP 65.2.22.171, Ubuntu 22.04 LTS
 - 2026-04-27 | Built `deploy/setup_vps.sh` — one-command full setup: Python 3.11, Nginx, 5 systemd services
 - 2026-04-27 | Built `deploy/restart.sh` / `status.sh` / `update.sh` — VPS management scripts
 - 2026-04-27 | Added `algotrading-ticker` systemd service — runs ticker_service.py 24/7 for live WebSocket prices
 - 2026-04-27 | Fixed 15-min delay issue — ticker_service.py must run as service (was missing from VPS services)
 - 2026-04-27 | Added yfinance install to update.sh — US futures/gold/crude data for global market widget
-- 2026-04-27 | SEBI rule: static IP mandatory from Apr 1 2026 for all broker APIs — VPS IP 13.206.86.130 used
-- 2026-04-27 | Pending: register 13.206.86.130 in Kite developer portal (call Zerodha support)
-- 2026-04-27 | Breeze app registered — API key: 295593q0yl0367zcAW832S7610=9L03U, IP: 13.206.86.130
+- 2026-04-27 | SEBI rule: static IP mandatory from Apr 1 2026 for all broker APIs — VPS IP 65.2.22.171 used
+- 2026-04-30 | ✅ VPS IP 65.2.22.171 registered with Zerodha Kite — live orders enabled
+- 2026-04-27 | Breeze app registered — API key: 295593q0yl0367zcAW832S7610=9L03U, IP: 65.2.22.171
 - 2026-04-27 | Built `breeze_data.py` — Breeze primary data source: historical, F&O, live quotes, session mgmt
 - 2026-04-27 | Breeze strategy: primary data source (free, 3yr history, 1sec), Kite only for trading/orders
 - 2026-04-27 | Breeze must run from VPS (IP enforced) — test tomorrow when SSH fixed

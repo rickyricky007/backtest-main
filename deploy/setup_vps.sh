@@ -5,7 +5,7 @@
 #  Usage: bash setup_vps.sh <your_github_repo_url>
 #
 #  Example:
-#    bash setup_vps.sh https://github.com/yourusername/backtest-main.git
+#    bash setup_vps.sh https://github.com/yourusername/ricky-1.git
 # ============================================================
 
 set -e  # Exit on any error

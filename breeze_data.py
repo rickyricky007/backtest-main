@@ -10,7 +10,7 @@ Usage:
 Daily session (run once after 8am):
     python breeze_data.py --login
 
-IMPORTANT: Must be run from VPS (IP 13.206.86.130) — Breeze enforces IP whitelist.
+IMPORTANT: Must be run from VPS (IP 65.2.22.171) — Breeze enforces IP whitelist.
 """
 
 from __future__ import annotations

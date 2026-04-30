@@ -556,7 +556,7 @@ def get_direct_live_reply(prompt: str, snapshot: dict) -> str | None:
             "- `strategy_trades` — strategy signal log with P&L\n"
             "- `sl_positions` — active stop-loss positions\n"
             "- `trade_journal` — manual trade diary entries\n\n"
-            "Located in `backtest-main/dashboard.sqlite`"
+            "Located in `ricky 1/dashboard.sqlite`"
         )
 
     if any(k in q for k in ["how many page", "all page", "list page", "what page", "dashboard page"]):
@@ -583,7 +583,7 @@ def get_direct_live_reply(prompt: str, snapshot: dict) -> str | None:
         return (
             "🚀 **How to start:**\n\n"
             "```bash\n"
-            "cd backtest-main\n"
+            "cd ~/algo_trading/'ricky 1'\n"
             "source venv/bin/activate\n"
             "python generate_token.py <request_token>   # once per morning\n"
             "python ticker_service.py                   # live WebSocket prices\n"

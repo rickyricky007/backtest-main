@@ -62,7 +62,7 @@ TELEGRAM_CHAT_ID=your_chat_id
 ## 📁 Project Structure
 
 
-backtest-main/
+ricky 1/
 ├── app.py                 ← Main dashboard
 ├── kite_data.py           ← Kite API helpers
 ├── rsi_strategy.py        ← RSI strategy logic

@@ -9,7 +9,7 @@
 #    3. Restarts VPS services (ticker, dashboard)
 #    4. Reminds you to refresh Breeze token on VPS
 #
-#  Usage (from backtest-main folder):
+#  Usage (from "ricky 1" folder):
 #    bash deploy/morning_startup.sh
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -19,7 +19,7 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
-VPS_IP="13.206.86.130"
+VPS_IP="65.2.22.171"
 VPS_KEY="$HOME/Downloads/algotrading-key.pem"
 VPS_USER="ubuntu"
 APP_DIR="/opt/algotrading/app"
@@ -39,7 +39,7 @@ echo ""
 info "Getting Kite login URL..."
 LOGIN_URL=$(python -c "from kite_data import kite_login_url; print(kite_login_url())" 2>/dev/null)
 if [ -z "$LOGIN_URL" ]; then
-    err "Could not get Kite login URL. Make sure you're in backtest-main folder with venv active."
+    err "Could not get Kite login URL. Make sure you're in 'ricky 1' folder with venv active."
 fi
 
 echo ""
