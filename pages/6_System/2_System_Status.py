@@ -22,6 +22,7 @@ from pathlib import Path
 import streamlit as st
 
 import kite_data as kd
+from app_settings import get_bool, set_bool
 from auth_streamlit import render_sidebar_kite_session
 from db import count
 
@@ -163,6 +164,32 @@ with col4:
 
 st.divider()
 
+# ── 1.5 Token Expiry Alert Toggle ─────────────────────────────────────────────
+st.subheader("🔔 Token Expiry Alert")
+try:
+    current = get_bool("token_alert_enabled", default=True)
+    new_val = st.toggle(
+        "Daily token expiry alert (08:30–09:15 IST, every 20 min via Telegram)",
+        value=current,
+        key="token_alert_toggle",
+        help="ON: Telegram alerts every 20 min if token is missing/invalid. "
+             "OFF: no alerts ever (until you switch back on). "
+             "Persisted in DB — survives restarts.",
+    )
+    if new_val != current:
+        set_bool("token_alert_enabled", new_val)
+        st.success(f"Alert {'enabled' if new_val else 'disabled'} (saved permanently).")
+
+    alert_proc = _process_running("token_alert_service.py")
+    icon = "🟢" if alert_proc else "🔴"
+    st.caption(f"{icon} Service: {'Running' if alert_proc else 'Stopped'} — "
+               "start with `sudo systemctl start algotrading-token-alert` (EC2) or "
+               "`python token_alert_service.py` (local)")
+except Exception as e:
+    st.error(f"Toggle error: {e}")
+
+st.divider()
+
 # ── 2. DB Stats ───────────────────────────────────────────────────────────────
 st.subheader("🗄️ Database")
 
@@ -186,6 +213,7 @@ procs = {
     "Process Guard":       "process_guard.py",
     "Scheduler":           "scheduler.py",
     "Auto Renew Token":    "auto_renew_token.py",
+    "Token Alert Service": "token_alert_service.py",
 }
 
 proc_cols = st.columns(3)
