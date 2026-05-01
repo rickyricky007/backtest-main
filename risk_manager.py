@@ -18,6 +18,9 @@ from __future__ import annotations
 from datetime import datetime, time as dtime
 from typing import TYPE_CHECKING
 
+import json
+
+from app_settings import get_setting, set_setting
 from position_sizer import PositionSizer
 from logger import get_logger
 from telegram import send_risk_breach
@@ -60,17 +63,27 @@ class RiskManager:
         # Position sizer
         self.sizer = PositionSizer(capital=capital)
 
-        # Runtime state — resets each day
-        self._daily_pnl:      float    = 0.0
-        self._order_count:    int      = 0
-        self._open_positions: set[str] = set()
-        self._signal_keys:    set[str] = set()
-        self._last_reset:     str      = ""
+        # Runtime state — resets each day, persisted to DB so restarts don't reset mid-day
+        self._daily_pnl:      float                  = 0.0
+        self._order_count:    int                    = 0
+        # _open_positions: symbol → {"greeks": {delta,theta,vega}, "qty": int, "action": str}
+        self._open_positions: dict[str, dict]        = {}
+        self._signal_keys:    set[str]               = set()
+        self._last_reset:     str                    = ""   # set below to today
 
-        # Greeks tracking
+        # Greeks tracking (running net across all open positions)
         self._net_delta: float = 0.0
         self._net_theta: float = 0.0
         self._net_vega:  float = 0.0
+
+        # Initialize daily reset marker to today (will be overwritten if state restored)
+        self._last_reset = datetime.now().strftime("%Y-%m-%d")
+
+        # Restore state from DB (survives process_guard restarts mid-day)
+        try:
+            self._restore_state()
+        except Exception:
+            log.error("Failed to restore risk_manager state from DB", exc_info=True)
 
     # ── Daily reset ───────────────────────────────────────────────────────────
 
@@ -82,6 +95,51 @@ class RiskManager:
             self._signal_keys  = set()
             self._last_reset   = today
             log.info(f"Daily reset for {today}")
+            self._save_state()
+
+    # ── State persistence (survives mid-day restarts) ─────────────────────────
+
+    def _save_state(self) -> None:
+        """Persist mutable state to app_settings table. Called after every change."""
+        try:
+            state = {
+                "daily_pnl":       self._daily_pnl,
+                "order_count":     self._order_count,
+                "open_positions":  self._open_positions,
+                "last_reset":      self._last_reset,
+                "net_delta":       self._net_delta,
+                "net_theta":       self._net_theta,
+                "net_vega":        self._net_vega,
+            }
+            set_setting("risk_manager_state", json.dumps(state))
+        except Exception:
+            log.error("_save_state failed", exc_info=True)
+
+    def _restore_state(self) -> None:
+        """Reload state from DB on init. If state is from a different day, skip restore."""
+        try:
+            raw = get_setting("risk_manager_state", "")
+            if not raw:
+                return
+            state = json.loads(raw)
+            today = datetime.now().strftime("%Y-%m-%d")
+            saved_date = state.get("last_reset", "")
+            if saved_date != today:
+                log.info(f"Stale risk state ({saved_date}) — starting fresh for {today}")
+                return
+            self._daily_pnl      = float(state.get("daily_pnl", 0.0))
+            self._order_count    = int(state.get("order_count", 0))
+            self._open_positions = state.get("open_positions", {}) or {}
+            self._last_reset     = saved_date
+            self._net_delta      = float(state.get("net_delta", 0.0))
+            self._net_theta      = float(state.get("net_theta", 0.0))
+            self._net_vega       = float(state.get("net_vega", 0.0))
+            log.info(
+                f"Restored risk state: pnl=₹{self._daily_pnl:+,.0f} "
+                f"orders={self._order_count} positions={len(self._open_positions)}"
+            )
+        except Exception:
+            log.error("_restore_state failed", exc_info=True)
 
     # ── Main gate ─────────────────────────────────────────────────────────────
 
@@ -214,17 +272,49 @@ class RiskManager:
     # ── State updates ─────────────────────────────────────────────────────────
 
     def on_order_placed(self, signal: "Signal") -> None:
-        self._order_count += 1
-        if signal.action in ("BUY", "SELL"):
-            self._open_positions.add(signal.symbol)
-        elif signal.action in ("EXIT", "EXIT_SHORT"):
-            self._open_positions.discard(signal.symbol)
+        try:
+            self._order_count += 1
+            greeks = signal.meta.get("greeks", {}) if signal.meta else {}
+
+            if signal.action in ("BUY", "SELL"):
+                # Track position with its Greeks for later decrement on EXIT
+                self._open_positions[signal.symbol] = {
+                    "action":   signal.action,
+                    "qty":      signal.quantity,
+                    "greeks":   greeks,
+                }
+                if greeks:
+                    self.update_greeks(
+                        delta=greeks.get("delta", 0),
+                        theta=greeks.get("theta", 0),
+                        vega=greeks.get("vega", 0),
+                    )
+
+            elif signal.action in ("EXIT", "EXIT_SHORT"):
+                # Decrement Greeks for the closing position
+                pos = self._open_positions.pop(signal.symbol, None)
+                if pos and pos.get("greeks"):
+                    g = pos["greeks"]
+                    self.update_greeks(
+                        delta=-g.get("delta", 0),
+                        theta=-g.get("theta", 0),
+                        vega=-g.get("vega", 0),
+                    )
+                    log.info(f"Decremented Greeks on EXIT {signal.symbol}: {g}")
+
+            self._save_state()
+        except Exception:
+            log.error("on_order_placed failed", exc_info=True)
 
     def on_pnl_update(self, pnl_delta: float) -> None:
-        self._daily_pnl += pnl_delta
-        log.info(f"Daily P&L updated: ₹{self._daily_pnl:+,.0f}")
-        if self._daily_pnl <= -abs(self.max_daily_loss):
-            log.critical(f"🔴 DAILY LOSS LIMIT BREACHED: ₹{self._daily_pnl:,.0f} — all trading blocked!")
+        try:
+            self._daily_pnl += pnl_delta
+            log.info(f"Daily P&L updated: ₹{self._daily_pnl:+,.0f}")
+            self._save_state()
+            if self._daily_pnl <= -abs(self.max_daily_loss):
+                log.critical(f"🔴 DAILY LOSS LIMIT BREACHED: ₹{self._daily_pnl:,.0f} — all trading blocked!")
+        except Exception:
+            log.error("on_pnl_update failed", exc_info=True)
 
     # ── Full status ───────────────────────────────────────────────────────────
 
@@ -234,7 +324,7 @@ class RiskManager:
             "daily_pnl":       round(self._daily_pnl, 2),
             "daily_pnl_%":     round(self._daily_pnl / self.capital * 100, 2),
             "orders_today":    self._order_count,
-            "open_positions":  list(self._open_positions),
+            "open_positions":  list(self._open_positions.keys()),
             "loss_limit_hit":  self._daily_pnl <= -abs(self.max_daily_loss),
             "greeks":          self.greeks_status(),
         }

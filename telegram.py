@@ -29,6 +29,21 @@ from logger import get_logger
 
 log = get_logger("telegram")
 
+
+# ── Alert toggle gate (registry-driven master + per-alert toggles) ────────────
+def _gated(alert_id: str) -> bool:
+    """
+    Returns True if this alert should fire (toggle is ON and master is ON).
+    Falls OPEN (allows alert) on any error so we never silently drop alerts.
+    """
+    try:
+        from alert_registry import is_enabled
+        return is_enabled(alert_id)
+    except Exception:
+        log.error(f"_gated check failed for '{alert_id}' — allowing alert", exc_info=True)
+        return True
+
+
 # ── Core sender ───────────────────────────────────────────────────────────────
 
 def _send(message: str) -> bool:
@@ -77,6 +92,8 @@ def send_signal(
 ) -> bool:
     """BUY or SELL signal fired by confluence engine."""
     try:
+        if not _gated("signal"):
+            return False
         emoji  = "🟢" if action == "BUY" else "🔴"
         tag    = "📄 PAPER" if mode == "PAPER" else "🔴 LIVE"
         msg = (
@@ -103,6 +120,8 @@ def send_order(
 ) -> bool:
     """Order placed or failed."""
     try:
+        if not _gated("order"):
+            return False
         emoji = "✅" if status == "COMPLETE" else "❌"
         tag   = "📄 PAPER" if mode == "PAPER" else "🔴 LIVE"
         msg = (
@@ -127,6 +146,8 @@ def send_sl_hit(
 ) -> bool:
     """Stop loss or target triggered."""
     try:
+        if not _gated("sl_hit"):
+            return False
         pnl_emoji = "🟢" if pnl >= 0 else "🔴"
         tag       = "📄 PAPER" if mode == "PAPER" else "🔴 LIVE"
         msg = (
@@ -149,6 +170,8 @@ def send_risk_breach(
 ) -> bool:
     """Daily loss limit or position limit breached — CRITICAL."""
     try:
+        if not _gated("risk_breach"):
+            return False
         msg = (
             f"⚠️ <b>RISK BREACH — Trading Paused</b>\n\n"
             f"❌ Reason      : {reason}\n"
@@ -170,6 +193,8 @@ def send_crash(
 ) -> bool:
     """Service crash detected by process_guard."""
     try:
+        if not _gated("crash"):
+            return False
         msg = (
             f"💥 <b>Service Crashed: {service}</b>\n"
             f"🔄 Restart attempt #{attempt}\n"
@@ -185,6 +210,8 @@ def send_crash(
 def send_token_expired() -> bool:
     """Kite access token expired mid-day."""
     try:
+        if not _gated("token_expired"):
+            return False
         msg = (
             f"🔑 <b>Kite Token Expired!</b>\n\n"
             f"⚠️ Live data and order placement are now offline.\n\n"
@@ -216,6 +243,8 @@ def send_daily_report(
 ) -> bool:
     """End-of-day P&L summary sent at 3:30pm."""
     try:
+        if not _gated("daily_report"):
+            return False
         pnl_emoji = "🟢" if total_pnl >= 0 else "🔴"
         tag       = "📄 PAPER" if mode == "PAPER" else "🔴 LIVE"
         msg = (
@@ -239,6 +268,8 @@ def send_daily_report(
 def send_startup(services: list[str]) -> bool:
     """System started — sent by process_guard on launch."""
     try:
+        if not _gated("startup"):
+            return False
         msg = (
             f"🚀 <b>Algo Trading System Started</b>\n\n"
             f"✅ Services: {', '.join(services)}\n"

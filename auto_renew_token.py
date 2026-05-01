@@ -43,6 +43,15 @@ KITE_LOGIN_URL = cfg.kite_login_url
 # ── Telegram helper ───────────────────────────────────────────────────────────
 
 def _send_telegram(msg: str) -> bool:
+    # Master kill switch (registry-driven) — when OFF, suppress all Telegram
+    try:
+        from alert_registry import is_master_enabled
+        if not is_master_enabled():
+            print("[AutoRenew] Telegram suppressed by master alert switch")
+            return False
+    except Exception:
+        pass  # registry unavailable — proceed (don't silently drop critical token alerts)
+
     if not TG_BOT_TOKEN or not TG_CHAT_ID:
         print("[AutoRenew] Telegram not configured — printing instead:")
         print(msg)

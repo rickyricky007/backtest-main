@@ -30,11 +30,14 @@ from pathlib import Path
 from kiteconnect import KiteTicker
 
 import kite_data as kd
+from logger import get_logger
 from order_manager    import OrderManager
 from risk_manager     import RiskManager
 from stop_loss_manager import StopLossManager
 from regime_filter    import RegimeTracker
 from strategies       import RSIStrategy, SMAStrategy
+
+log = get_logger("strategy_engine")
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # CONFIGURE YOUR STRATEGIES HERE
@@ -112,12 +115,12 @@ _running = True
 
 def _load_instrument_tokens() -> None:
     """Build symbol → instrument_token map from Kite instruments list."""
-    print("[Engine] Loading instrument tokens from Kite…")
+    log.info("Loading instrument tokens from Kite...")
     kite   = kd.kite_client()
     instrs = kite.instruments("NSE")
     for i in instrs:
         _symbol_token_map[i["tradingsymbol"]] = i["instrument_token"]
-    print(f"[Engine] Loaded {len(_symbol_token_map)} NSE instruments")
+    log.info(f"Loaded {len(_symbol_token_map)} NSE instruments")
 
 
 def _register_strategies() -> list[int]:
@@ -125,17 +128,17 @@ def _register_strategies() -> list[int]:
     tokens = []
     for strategy in ACTIVE_STRATEGIES:
         if not strategy.enabled:
-            print(f"[Engine] ⏭  Skipping disabled strategy: {strategy}")
+            log.info(f"⏭  Skipping disabled strategy: {strategy}")
             continue
         token = _symbol_token_map.get(strategy.symbol)
         if not token:
-            print(f"[Engine] ⚠️  Token not found for {strategy.symbol} — skipping {strategy.name}")
+            log.warning(f"Token not found for {strategy.symbol} — skipping {strategy.name}")
             continue
         if token not in _token_strategy_map:
             _token_strategy_map[token] = []
         _token_strategy_map[token].append(strategy)
         tokens.append(token)
-        print(f"[Engine] ✅ Registered: {strategy}")
+        log.info(f"✅ Registered: {strategy}")
     return list(set(tokens))
 
 
@@ -148,7 +151,7 @@ def on_ticks(ws, ticks):
         # ── Feed tick to Stop Loss Manager first ──────────────────────────────
         sl_exit = SL_MGR.on_tick(tick)
         if sl_exit:
-            print(f"[Engine] SL/Target triggered: {sl_exit}")
+            log.info(f"SL/Target triggered: {sl_exit}")
 
         # ── Update regime filter with OHLC if available ──────────────────────
         ohlc = tick.get("ohlc", {})
@@ -173,10 +176,7 @@ def on_ticks(ws, ticks):
                         strat._regime_block_count = 0
                     strat._regime_block_count += 1
                     if strat._regime_block_count % 100 == 1:
-                        print(
-                            f"[Regime] ⏸  {strat.name} on {strat.symbol} blocked "
-                            f"— market is {regime} (ADX={adx:.1f})"
-                        )
+                        log.info(f"Regime block: {strat.name} on {strat.symbol} — market is {regime} (ADX={adx:.1f})")
                     continue
                 else:
                     strat._regime_block_count = 0
@@ -188,7 +188,7 @@ def on_ticks(ws, ticks):
                 # ── Risk check ────────────────────────────────────────────────
                 approved, reason = RISK.approve(sig)
                 if not approved:
-                    print(f"[Risk] ❌ Blocked: {sig.strategy} {sig.action} {sig.symbol} — {reason}")
+                    log.warning(f"Risk blocked: {sig.strategy} {sig.action} {sig.symbol} — {reason}")
                     continue
 
                 # ── Execute order ─────────────────────────────────────────────
@@ -216,14 +216,14 @@ def on_ticks(ws, ticks):
                             **sl_cfg,
                         )
                 else:
-                    print(f"[Engine] ❌ Order failed: {result.get('error')}")
+                    log.error(f"Order failed: {result.get('error')}")
 
             except Exception as e:
-                print(f"[Engine] ⚠️  Error in {strat.name}: {e}")
+                log.error(f"Error in {strat.name}: {e}", exc_info=True)
 
 
 def _send_alert(sig) -> None:
-    """Send Telegram alert for executed signals (non-blocking)."""
+    """Send Telegram alert for executed signals (non-blocking, gated on 'signal' toggle)."""
     try:
         from alert_engine import send_telegram_message
         from config import cfg
@@ -240,9 +240,10 @@ def _send_alert(sig) -> None:
                 f"⚙️ Mode: {sig.strategy}\n"
                 f"⏰ {sig.timestamp.strftime('%d %b %Y %H:%M:%S')}"
             )
-            send_telegram_message(token, chat_id, msg)
+            # Gated through alert_engine.send_telegram_message → master+per-alert
+            send_telegram_message(token, chat_id, msg, alert_id="signal")
     except Exception:
-        pass  # alerts are optional — don't crash engine
+        log.warning("_send_alert failed (non-critical)", exc_info=True)
 
 
 def on_connect(ws, response):
@@ -251,28 +252,28 @@ def on_connect(ws, response):
     ws.set_mode(ws.MODE_FULL, tokens)
     symbols = [s for strat_list in _token_strategy_map.values()
                for s in [strat_list[0].symbol]]
-    print(f"[Engine] 🚀 Connected — watching: {', '.join(symbols)}")
+    log.info(f"🚀 Connected — watching: {', '.join(symbols)}")
 
 
 def on_reconnect(ws, attempts):
-    print(f"[Engine] 🔄 Reconnecting… attempt {attempts}")
+    log.warning(f"🔄 Reconnecting... attempt {attempts}")
 
 
 def on_noreconnect(ws):
-    print("[Engine] ❌ Max reconnects reached. Restart the engine.")
+    log.error("Max reconnects reached. Restart the engine.")
 
 
 def on_error(ws, code, reason):
-    print(f"[Engine] ⚠️  WebSocket error {code}: {reason}")
+    log.warning(f"WebSocket error {code}: {reason}")
 
 
 def on_close(ws, code, reason):
-    print(f"[Engine] 🔴 Closed: {code} — {reason}")
+    log.warning(f"WebSocket closed: {code} — {reason}")
 
 
 def _handle_signal(sig, frame):
     global _running
-    print("\n[Engine] Shutting down gracefully…")
+    log.info("Shutting down gracefully...")
     for strat in ACTIVE_STRATEGIES:
         strat.on_stop()
     _running = False
@@ -283,13 +284,13 @@ def main():
     signal.signal(signal.SIGINT,  _handle_signal)
     signal.signal(signal.SIGTERM, _handle_signal)
 
-    print("=" * 60)
-    print("  STRATEGY ENGINE")
-    print("=" * 60)
-    print(f"  Strategies : {len(ACTIVE_STRATEGIES)}")
-    print(f"  Risk limit : ₹{RISK.max_daily_loss:,.0f}/day")
-    print(f"  Max orders : {RISK.max_orders_day}/day")
-    print("=" * 60)
+    log.info("=" * 60)
+    log.info("  STRATEGY ENGINE")
+    log.info("=" * 60)
+    log.info(f"  Strategies : {len(ACTIVE_STRATEGIES)}")
+    log.info(f"  Risk limit : ₹{RISK.max_daily_loss:,.0f}/day")
+    log.info(f"  Max orders : {RISK.max_orders_day}/day")
+    log.info("=" * 60)
 
     # Load tokens
     _load_instrument_tokens()
@@ -297,7 +298,7 @@ def main():
     # Register strategies
     tokens = _register_strategies()
     if not tokens:
-        print("[Engine] ❌ No strategies registered. Add strategies to ACTIVE_STRATEGIES.")
+        log.error("No strategies registered. Add strategies to ACTIVE_STRATEGIES.")
         sys.exit(1)
 
     # Call on_start for each strategy
@@ -316,7 +317,7 @@ def main():
     kws.on_error       = on_error
     kws.on_close       = on_close
 
-    print("[Engine] Connecting to Kite WebSocket…")
+    log.info("Connecting to Kite WebSocket...")
     kws.connect(threaded=False)
 
 

@@ -32,7 +32,7 @@ import numpy as np
 
 from fo_symbols import (
     ALL_FO_SYMBOLS, FO_INDICES, FO_STOCKS, TOP_50_LIQUID,
-    get_yf_ticker, is_index,
+    get_yf_ticker, get_exchange, is_index,
 )
 from indicators import score_symbol, score_summary, BUY_THRESHOLD, SELL_THRESHOLD
 from logger import get_logger
@@ -234,6 +234,7 @@ class SignalEngine:
                     quantity = self.quantity,
                     score    = r["score"],
                     mode     = self.mode,
+                    exchange = get_exchange(r["symbol"]),
                 )
 
                 approved, reason = self._risk.approve(signal)
@@ -242,13 +243,13 @@ class SignalEngine:
                     continue
 
                 # Execute via OrderManager
+                exchange = get_exchange(r["symbol"])
                 order_result = self._om.market(
                     symbol   = r["symbol"],
                     action   = r["action"],
                     qty      = self.quantity,
-                    exchange = "NSE",
+                    exchange = exchange,
                     strategy = f"ScoreEngine({r['score']:+d})",
-                    mode     = self.mode,
                     meta     = {
                         "score":    r["score"],
                         "pct":      r["pct"],
@@ -343,7 +344,7 @@ class SignalEngine:
 
 class _make_signal:
     """Lightweight signal object compatible with RiskManager.approve()."""
-    def __init__(self, symbol, action, price, quantity, score, mode):
+    def __init__(self, symbol, action, price, quantity, score, mode, exchange="NSE"):
         self.symbol   = symbol
         self.action   = action
         self.price    = price
@@ -351,7 +352,7 @@ class _make_signal:
         self.strategy = f"ScoreEngine({score:+d})"
         self.mode     = mode
         self.meta     = {"score": score}
-        self.exchange = "NSE"
+        self.exchange = exchange
 
 
 # ── CLI entry point ───────────────────────────────────────────────────────────

@@ -9,7 +9,7 @@
 #    3. Restarts VPS services (ticker, dashboard)
 #    4. Reminds you to refresh Breeze token on VPS
 #
-#  Usage (from "ricky 1" folder):
+#  Usage (from ricky_1 folder):
 #    bash deploy/morning_startup.sh
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -39,7 +39,7 @@ echo ""
 info "Getting Kite login URL..."
 LOGIN_URL=$(python -c "from kite_data import kite_login_url; print(kite_login_url())" 2>/dev/null)
 if [ -z "$LOGIN_URL" ]; then
-    err "Could not get Kite login URL. Make sure you're in 'ricky 1' folder with venv active."
+    err "Could not get Kite login URL. Make sure you're in ricky_1 folder with venv active."
 fi
 
 echo ""

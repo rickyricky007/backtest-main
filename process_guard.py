@@ -84,6 +84,22 @@ _running = True
 # ── Telegram ──────────────────────────────────────────────────────────────────
 
 def _alert(msg: str) -> None:
+    """
+    Watchdog Telegram alert. Routes through master alert switch — when OFF,
+    NO Telegram traffic; the message is still logged locally.
+    """
+    # Master switch gate (lazy import — process_guard runs as a separate Python
+    # process and we don't want startup ordering to fail).
+    try:
+        from alert_registry import is_master_enabled
+        if not is_master_enabled():
+            _log(f"ALERT (telegram suppressed by master switch): {msg}")
+            return
+    except Exception:
+        # If registry is unavailable, fall through and send the alert
+        # (better noisy than silently dropping a watchdog crash alert).
+        pass
+
     bot = cfg.telegram_bot_token
     cid = cfg.telegram_chat_id
     if bot and cid:

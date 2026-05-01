@@ -229,6 +229,28 @@ StandardError=journal
 WantedBy=multi-user.target
 SVCFILE
 
+
+# Breeze (ICICI) Monitor service - keeps Breeze session alive for F&O historical data
+cat > /etc/systemd/system/algotrading-breeze.service << SVCFILE
+[Unit]
+Description=AlgoTrading Breeze Session Monitor
+After=network.target algotrading-dashboard.service
+
+[Service]
+Type=simple
+User=$SERVICE_USER
+WorkingDirectory=$APP_DIR/app
+Environment=PATH=$APP_DIR/app/venv/bin
+ExecStart=$APP_DIR/app/venv/bin/python breeze_monitor.py
+Restart=always
+RestartSec=60
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+SVCFILE
+
 log "Systemd services created"
 
 # ── 9. Enable and start services ──────────────────────────────────────────────
@@ -239,6 +261,7 @@ systemctl enable algotrading-token
 systemctl enable algotrading-ticker
 systemctl enable algotrading-scheduler
 systemctl enable algotrading-guard
+systemctl enable algotrading-breeze
 log "Services enabled (auto-start on reboot)"
 
 # ── 10. Nginx reverse proxy ───────────────────────────────────────────────────

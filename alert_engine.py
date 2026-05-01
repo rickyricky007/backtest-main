@@ -1,4 +1,11 @@
-"""Alert engine — Telegram notifications for price and P&L alerts."""
+"""Alert engine — Telegram notifications for price and P&L alerts.
+
+All Telegram sends route through send_telegram_message() — which respects
+the master alert switch in alert_registry. When master switch is OFF, ALL
+Telegram traffic from this function is suppressed.
+
+Optional alert_id parameter checks per-alert toggle too.
+"""
 
 from __future__ import annotations
 
@@ -9,12 +16,47 @@ import requests
 from dotenv import load_dotenv
 import os
 
+from logger import get_logger
+
+log = get_logger("alert_engine")
+
+
+# ── Master-switch gate (lazy import to avoid circular dependencies) ───────
+def _allowed(alert_id: str | None = None) -> bool:
+    """
+    Returns False when master switch is OFF, OR when a known alert_id is OFF.
+    Returns True (fail-open) on registry errors so we never silently drop.
+    """
+    try:
+        from alert_registry import is_master_enabled, is_enabled
+        if not is_master_enabled():
+            return False
+        if alert_id:
+            return is_enabled(alert_id)
+        return True
+    except Exception:
+        log.error(f"_allowed check failed for '{alert_id}' — allowing send", exc_info=True)
+        return True
+
 
 # ── Telegram ───────────────────────────────────────────────────────────────
 
-def send_telegram_message(token: str, chat_id: str, message: str) -> bool:
-    """Send a message via Telegram bot. Returns True if successful."""
+def send_telegram_message(
+    token: str,
+    chat_id: str,
+    message: str,
+    alert_id: str | None = None,
+) -> bool:
+    """
+    Send a message via Telegram bot. Returns True if successful.
+    
+    alert_id: optional alert_registry key (e.g. "signal", "price_alert").
+              If provided, respects per-alert toggle. Always respects master switch.
+    """
     try:
+        if not _allowed(alert_id):
+            log.info(f"Telegram suppressed by alert toggle (alert_id={alert_id})")
+            return False
         url = f"https://api.telegram.org/bot{token}/sendMessage"
         response = requests.post(
             url,
@@ -23,6 +65,7 @@ def send_telegram_message(token: str, chat_id: str, message: str) -> bool:
         )
         return response.status_code == 200
     except Exception:
+        log.error("send_telegram_message failed", exc_info=True)
         return False
 
 

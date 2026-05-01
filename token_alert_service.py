@@ -103,29 +103,38 @@ def main() -> None:
             now_ist  = datetime.now(IST)
             today    = now_ist.strftime("%Y-%m-%d")
 
-            # 1. Toggle off → idle
+            # 1. Master switch off → idle (universal kill switch)
+            try:
+                from alert_registry import is_master_enabled
+                if not is_master_enabled():
+                    time.sleep(LOOP_TICK)
+                    continue
+            except Exception:
+                pass
+
+            # 2. Per-alert toggle off → idle
             if not get_bool(SETTING_KEY, default=DEFAULT_ON):
                 time.sleep(LOOP_TICK)
                 continue
 
-            # 2. Outside alert window → idle
+            # 3. Outside alert window → idle
             if not in_alert_window(now_ist):
                 time.sleep(LOOP_TICK)
                 continue
 
-            # 3. Already validated today → idle
+            # 4. Already validated today → idle
             if last_valid_date == today:
                 time.sleep(LOOP_TICK)
                 continue
 
-            # 4. Token valid? → mark and idle
+            # 5. Token valid? → mark and idle
             if is_token_valid():
                 last_valid_date = today
                 log.info(f"Token valid for {today} — alerts paused for the day")
                 time.sleep(LOOP_TICK)
                 continue
 
-            # 5. Token invalid → alert (with 20-min gap)
+            # 6. Token invalid → alert (with 20-min gap)
             now_ts = time.time()
             if now_ts - last_alert_ts >= ALERT_GAP:
                 if send_alert(now_ist):

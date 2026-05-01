@@ -1,3 +1,5 @@
+breeze-connect==1.0.55
+psycopg2-binary==2.9.10
 attrs==26.1.0
 autobahn==19.11.2
 Automat==25.4.16

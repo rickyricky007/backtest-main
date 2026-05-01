@@ -22,9 +22,18 @@ from pathlib import Path
 import streamlit as st
 
 import kite_data as kd
+from alert_registry import (
+    ALERTS, MASTER_KEY, MASTER_DEFAULT,
+    list_by_category, status_summary,
+    is_master_enabled, set_master_enabled,
+    set_enabled,
+)
 from app_settings import get_bool, set_bool
 from auth_streamlit import render_sidebar_kite_session
 from db import count
+from logger import get_logger
+
+log = get_logger("system_status_page")
 
 BASE_DIR = Path(__file__).parent.parent
 LOG_DIR  = BASE_DIR / "logs"
@@ -164,29 +173,119 @@ with col4:
 
 st.divider()
 
-# ── 1.5 Token Expiry Alert Toggle ─────────────────────────────────────────────
-st.subheader("🔔 Token Expiry Alert")
-try:
-    current = get_bool("token_alert_enabled", default=True)
-    new_val = st.toggle(
-        "Daily token expiry alert (08:30–09:15 IST, every 20 min via Telegram)",
-        value=current,
-        key="token_alert_toggle",
-        help="ON: Telegram alerts every 20 min if token is missing/invalid. "
-             "OFF: no alerts ever (until you switch back on). "
-             "Persisted in DB — survives restarts.",
-    )
-    if new_val != current:
-        set_bool("token_alert_enabled", new_val)
-        st.success(f"Alert {'enabled' if new_val else 'disabled'} (saved permanently).")
+# ── 1.5 ONE-STOP ALERT CONTROL PANEL ─────────────────────────────────────────
+st.subheader("🔔 Alert Control Panel")
+st.caption(
+    "Master kill switch + per-alert toggles. All toggles are DB-persisted — they survive restarts. "
+    "New alert types added to `alert_registry.py` show up here automatically."
+)
 
+try:
+    summary = status_summary()
+    master_on = summary["master_enabled"]
+
+    # ── Master kill switch ───────────────────────────────────────────────────
+    mc1, mc2, mc3 = st.columns([2, 1, 1])
+    with mc1:
+        new_master = st.toggle(
+            "🚨 **MASTER ALERT SWITCH** — overrides all individual toggles below",
+            value=master_on,
+            key="master_alert_toggle",
+            help="OFF = ALL Telegram alerts silenced (regardless of individual toggles below). "
+                 "ON = individual toggles take effect. Useful for vacations, market holidays, debugging.",
+        )
+        if new_master != master_on:
+            set_master_enabled(new_master)
+            st.success(f"Master switch {'ON' if new_master else 'OFF'} — saved.")
+            st.rerun()
+
+    with mc2:
+        st.metric("Enabled", summary["enabled_count"])
+    with mc3:
+        st.metric("Disabled", summary["disabled_count"])
+
+    if not master_on:
+        st.error("🚨 Master switch is **OFF** — no alerts will fire from anywhere in the system. "
+                 "Individual toggles below are paused.")
+
+    st.markdown("---")
+
+    # ── Per-alert toggles, grouped by category ───────────────────────────────
+    grouped = list_by_category()
+
+    # Render two categories per row
+    cat_emoji = {
+        "Trading":  "💹",
+        "Risk":     "⚠️",
+        "System":   "🖥️",
+        "Schedule": "📅",
+        "Reports":  "📊",
+        "Manual":   "👤",
+    }
+
+    cats_with_items = [(c, items) for c, items in grouped.items() if items]
+    for i in range(0, len(cats_with_items), 2):
+        cols = st.columns(2)
+        for j, (cat, items) in enumerate(cats_with_items[i:i+2]):
+            with cols[j]:
+                st.markdown(f"### {cat_emoji.get(cat, '🔔')} {cat}")
+                for alert_id, defn, current_state in items:
+                    new_state = st.toggle(
+                        defn.label,
+                        value=current_state,
+                        key=f"alert_toggle_{alert_id}",
+                        help=defn.description,
+                        disabled=not master_on,
+                    )
+                    if new_state != current_state:
+                        if set_enabled(alert_id, new_state):
+                            st.toast(
+                                f"{'Enabled' if new_state else 'Disabled'}: {defn.label}",
+                                icon="✅" if new_state else "🔕",
+                            )
+                            st.rerun()
+
+    st.markdown("---")
+
+    # ── Service health for the daily token-alert background loop ─────────────
     alert_proc = _process_running("token_alert_service.py")
     icon = "🟢" if alert_proc else "🔴"
-    st.caption(f"{icon} Service: {'Running' if alert_proc else 'Stopped'} — "
-               "start with `sudo systemctl start algotrading-token-alert` (EC2) or "
-               "`python token_alert_service.py` (local)")
+    st.caption(
+        f"{icon} **token_alert_service**: {'Running' if alert_proc else 'Stopped'} — "
+        "start with `sudo systemctl start algotrading-token-alert` (EC2) or "
+        "`python token_alert_service.py` (local). "
+        "Other alerts fire from telegram.py directly — no separate service needed."
+    )
+
+    with st.expander("ℹ️ How to add a new alert in the future"):
+        st.markdown("""
+**3 steps — no UI changes needed.**
+
+1. **Add an entry in `alert_registry.py`** (one line in the `ALERTS` dict):
+   ```python
+   "my_new_alert": AlertDef(
+       key="alert_my_new_alert_enabled",
+       label="My new alert",
+       description="What this alert does.",
+       default_on=True,
+       category="Trading",   # or Risk / System / Schedule / Reports / Manual
+   ),
+   ```
+
+2. **In your alert-sending function**, gate it:
+   ```python
+   from alert_registry import is_enabled
+   if not is_enabled("my_new_alert"):
+       return False
+   # ... your send logic
+   ```
+
+3. **Reload this page** — your new toggle appears in the right category. Done.
+        """)
+
 except Exception as e:
-    st.error(f"Toggle error: {e}")
+    log.error("Alert panel render failed", exc_info=True)
+    st.error(f"Alert panel error: {e}")
 
 st.divider()
 
@@ -262,7 +361,7 @@ cmd_cols = st.columns(2)
 for i, (label, cmd) in enumerate(cmds.items()):
     with cmd_cols[i % 2]:
         st.markdown(f"**{label}**")
-        st.code(f"cd ~/algo_trading/'ricky 1' && {cmd}", language="bash")
+        st.code(f"cd ~/algo_trading/ricky_1 && {cmd}", language="bash")
 
 st.divider()
 

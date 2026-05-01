@@ -30,6 +30,7 @@ from datetime import datetime, date
 from pathlib import Path
 
 import requests
+from alert_registry import is_enabled
 from config import cfg
 from db import read_df
 
@@ -58,6 +59,15 @@ def _log(msg: str) -> None:
 
 
 def _send_telegram(msg: str) -> None:
+    """Defense-in-depth: also gate at sender level (jobs already gate on alert_id)."""
+    try:
+        from alert_registry import is_master_enabled
+        if not is_master_enabled():
+            _log(f"Scheduler Telegram suppressed by master switch: {msg[:80]}")
+            return
+    except Exception:
+        pass  # registry unavailable — proceed (don't silently drop)
+
     bot = cfg.telegram_bot_token
     cid = cfg.telegram_chat_id
     if not bot or not cid:
@@ -100,29 +110,38 @@ def job_token_reminder() -> None:
 def job_premarket_check() -> None:
     """09:10 — Validate token is ready before market open."""
     _log("JOB: premarket_check")
-    token_file = BASE_DIR / "access_token.json"
-    if not token_file.exists():
+    if not is_enabled("pre_market_check"):
+        _log("pre_market_check alert disabled — skipping Telegram")
+        return
+
+    # Real Kite token file is `.kite_access_token` (plain text)
+    token_file = BASE_DIR / ".kite_access_token"
+    if not token_file.exists() or not token_file.read_text().strip():
         _send_telegram(
-            "❌ *Pre-market Alert*: No access token found!\n"
-            "Market opens in 5 minutes — run `python generate_token.py` now!"
+            "❌ *Pre-market Alert*: No Kite access token found!\n"
+            "Market opens in 5 minutes — run `python generate_token.py <request_token>` now!"
         )
         return
 
-    data = json.loads(token_file.read_text())
-    today = datetime.now().strftime("%Y-%m-%d")
-    if data.get("date") != today:
+    # Validate token actually works (lightweight kite.profile() call)
+    try:
+        import kite_data as kd
+        kd.kite_client().profile()
+        _log("Token is fresh and valid for today. ✅")
+        _send_telegram("✅ *Pre-market check passed.* Token valid. Strategies starting at 09:15.")
+    except Exception as e:
         _send_telegram(
-            f"⚠️ *Pre-market Alert*: Token is from {data.get('date', 'unknown')} — not today!\n"
+            f"⚠️ *Pre-market Alert*: Token validation failed — {e}\n"
             "Please renew before 09:15."
         )
-    else:
-        _log("Token is fresh for today. ✅")
-        _send_telegram("✅ *Pre-market check passed.* Token valid. Strategies starting at 09:15.")
 
 
 def job_market_open() -> None:
     """09:15 — Market open: strategies should be live via watchdog."""
     _log("JOB: market_open")
+    if not is_enabled("market_open"):
+        _log("market_open alert disabled — skipping Telegram")
+        return
     _send_telegram(
         "🔔 *Market OPEN* (09:15 IST)\n"
         "Strategies are active. Ticker running. Good luck! 📈"
@@ -132,7 +151,10 @@ def job_market_open() -> None:
 def job_market_close() -> None:
     """15:30 — Market close."""
     _log("JOB: market_close")
-    _send_telegram("🔔 *Market CLOSED* (15:30 IST). Generating EOD report...")
+    if is_enabled("market_close"):
+        _send_telegram("🔔 *Market CLOSED* (15:30 IST). Generating EOD report...")
+    else:
+        _log("market_close alert disabled — skipping ping")
     # Give strategies time to exit positions
     time.sleep(30)
     job_eod_report()
@@ -141,6 +163,9 @@ def job_market_close() -> None:
 def job_eod_report() -> None:
     """15:45 — Send P&L summary to Telegram."""
     _log("JOB: eod_report")
+    if not is_enabled("daily_report"):
+        _log("daily_report alert disabled — skipping Telegram EOD report")
+        return
     try:
         today = date.today().strftime("%Y-%m-%d")
 

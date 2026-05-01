@@ -28,6 +28,9 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 from db import execute, query, init_tables
+from logger import get_logger
+
+log = get_logger("order_manager")
 
 if TYPE_CHECKING:
     from strategies.base_strategy import Signal
@@ -103,7 +106,7 @@ class OrderManager:
         self.mode    = mode.upper()
         self.product = product.upper()
         init_tables()
-        print(f"[OrderManager] {self.mode} mode | product={self.product}")
+        log.info(f"OrderManager {self.mode} mode | product={self.product}")
 
     # ═══════════════════════════════════════════════════════════════════════════
     # PUBLIC ORDER PLACEMENT METHODS
@@ -294,7 +297,7 @@ class OrderManager:
         Pass only the fields you want to change.
         """
         if self.mode == "PAPER":
-            print(f"[OrderManager] Paper modify order {order_id}")
+            log.info(f"Paper modify order {order_id}")
             return {"success": True, "order_id": order_id, "mode": "PAPER", "action": "MODIFIED"}
 
         try:
@@ -308,10 +311,10 @@ class OrderManager:
 
             result = kite.modify_order(**kwargs)
             _update_status(order_id, "MODIFIED")
-            print(f"[OrderManager] ✅ Modified order {order_id}")
+            log.info(f"✅ Modified order {order_id}")
             return {"success": True, "order_id": result}
         except Exception as e:
-            print(f"[OrderManager] ❌ Modify failed: {e}")
+            log.error(f"Modify order failed: {e}", exc_info=True)
             return {"error": str(e)}
 
     def cancel(self, order_id: str, variety: str = "regular") -> dict:
@@ -321,7 +324,7 @@ class OrderManager:
         """
         if self.mode == "PAPER":
             _update_status(order_id, "CANCELLED")
-            print(f"[OrderManager] Paper cancel order {order_id}")
+            log.info(f"Paper cancel order {order_id}")
             return {"success": True, "order_id": order_id, "mode": "PAPER", "action": "CANCELLED"}
 
         try:
@@ -329,10 +332,10 @@ class OrderManager:
             kite   = kd.kite_client()
             result = kite.cancel_order(variety=variety, order_id=order_id)
             _update_status(order_id, "CANCELLED")
-            print(f"[OrderManager] ✅ Cancelled order {order_id}")
+            log.info(f"✅ Cancelled order {order_id}")
             return {"success": True, "order_id": result}
         except Exception as e:
-            print(f"[OrderManager] ❌ Cancel failed: {e}")
+            log.error(f"Cancel order failed: {e}", exc_info=True)
             return {"error": str(e)}
 
     def status(self, order_id: str) -> dict:
@@ -405,7 +408,7 @@ class OrderManager:
             oid = order.get("order_id") or order.get("id", "")
             if oid:
                 results.append(self.cancel(str(oid)))
-        print(f"[OrderManager] ⚠️  Cancelled {len(results)} open orders")
+        log.warning(f"Cancelled {len(results)} open orders (cancel_all_open)")
         return results
 
     # ── Order history from DB ─────────────────────────────────────────────────
@@ -444,7 +447,7 @@ class OrderManager:
         meta:          dict | None = None,
     ) -> dict:
         label = f"{variety} {order_type} {action} {qty} {symbol}"
-        print(f"[OrderManager] → {label} @ ₹{price or 'MARKET'}")
+        log.info(f"→ {label} @ ₹{price or 'MARKET'}")
 
         if self.mode == "PAPER":
             return self._paper_place(
@@ -480,7 +483,7 @@ class OrderManager:
         order_type = kw.get("order_type", "MARKET").upper()
         action     = kw.get("action", "BUY").upper()
 
-        if exchange == "NFO" and "CE" in kw["symbol"] or "PE" in kw["symbol"]:
+        if exchange == "NFO" and ("CE" in kw["symbol"] or "PE" in kw["symbol"]):
             slip_pct = 0.0015   # 0.15% for options
         elif exchange == "NFO":
             slip_pct = 0.0005   # 0.05% for futures
@@ -519,10 +522,7 @@ class OrderManager:
                   "slippage_amt": slip_amt,
                   "slippage_pct": round(slip_pct * 100, 4)},
         )
-        print(
-            f"[OrderManager] ✅ Paper filled: {order_id} @ ₹{fill_price:.2f} "
-            f"(signal ₹{raw_price:.2f}, slip ₹{slip_amt:.2f})"
-        )
+        log.info(f"✅ Paper filled: {order_id} @ ₹{fill_price:.2f} (signal ₹{raw_price:.2f}, slip ₹{slip_amt:.2f})")
         return {
             "success":      True,
             "order_id":     order_id,
@@ -602,7 +602,7 @@ class OrderManager:
                 meta=kw.get("meta"),
             )
 
-            print(f"[OrderManager] ✅ Live order placed: {order_id}")
+            log.info(f"✅ Live order placed: {order_id}")
             return {"success": True, "order_id": str(order_id), "mode": "LIVE", "status": "PLACED"}
 
         except Exception as e:
@@ -616,5 +616,5 @@ class OrderManager:
                 exchange=kw.get("exchange", "NSE"),
                 reason=str(e),
             )
-            print(f"[OrderManager] ❌ Order failed: {e}")
+            log.error(f"Order placement failed: {e}", exc_info=True)
             return {"error": str(e)}

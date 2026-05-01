@@ -182,7 +182,7 @@ A production-grade algorithmic trading system built on Zerodha Kite API + Stream
 
 ## How to start every session
 ```bash
-cd ~/algo_trading/"ricky 1"
+cd ~/algo_trading/ricky_1
 source venv/bin/activate
 
 # Step 1 — get login URL, open in browser, copy request_token from redirect URL
@@ -320,6 +320,15 @@ Navigation: Home → Account → Market → Signals → Trading → Analytics �
 - 2026-04-27 | Added yfinance install to update.sh — US futures/gold/crude data for global market widget
 - 2026-04-27 | SEBI rule: static IP mandatory from Apr 1 2026 for all broker APIs — VPS IP 65.2.22.171 used
 - 2026-04-30 | ✅ VPS IP 65.2.22.171 registered with Zerodha Kite — live orders enabled
+- 2026-04-30 | Folder renamed `ricky 1` → `ricky_1` — all path refs updated across project
+- 2026-04-30 | Built `alert_registry.py` — one-stop registry for ALL Telegram alerts (14 alerts, 6 categories, master kill switch, DB-persisted)
+- 2026-04-30 | Gated every `telegram.py` send_xxx() + scheduler.py jobs on alert_registry — toggles now respected everywhere
+- 2026-04-30 | Replaced single toggle in System Status page with full alert control panel (master + grouped per-alert toggles + inline docs)
+- 2026-04-30 | Fixed `scheduler.py job_premarket_check` token-file path — was `access_token.json`, real file is `.kite_access_token`
+- 2026-04-30 | Critical fixes: signal_engine mode-kwarg bug + get_exchange routing; order_manager operator-precedence; requirements.txt got psycopg2-binary + breeze-connect; setup_vps.sh got algotrading-breeze service
+- 2026-04-30 | Logger cleanup: order_manager + strategy_engine + ticker_service + risk_manager all switched from print() to logger.get_logger(); dead top-level rsi_strategy.py archived
+- 2026-04-30 | risk_manager state now DB-persisted (survives mid-day restarts); _open_positions refactored to dict tracking per-position Greeks; Greeks now decremented on EXIT
+- 2026-04-30 | ticker_service.py rewritten — subscribes to all 56 symbols (TOP_50_LIQUID + 6 indices), 24h instruments_cache.json, logger + atomic writes
 - 2026-04-27 | Breeze app registered — API key: 295593q0yl0367zcAW832S7610=9L03U, IP: 65.2.22.171
 - 2026-04-27 | Built `breeze_data.py` — Breeze primary data source: historical, F&O, live quotes, session mgmt
 - 2026-04-27 | Breeze strategy: primary data source (free, 3yr history, 1sec), Kite only for trading/orders
