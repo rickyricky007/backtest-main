@@ -13,6 +13,7 @@ Or add to your end-of-day routine:
 from __future__ import annotations
 
 import ast
+import re
 import subprocess
 from datetime import datetime
 from pathlib import Path
@@ -20,6 +21,35 @@ from pathlib import Path
 BASE_DIR = Path(__file__).parent
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+
+
+def _session_handoff_line() -> str:
+    """
+    Pull Last updated + Agent / tool from SESSION.md (Current session section)
+    so CLAUDE.md shows who last updated the handoff — no manual duplicate typing.
+    """
+    path = BASE_DIR / "SESSION.md"
+    if not path.is_file():
+        return ""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except Exception:
+        return ""
+    idx = text.find("## Current session")
+    chunk = text[idx:] if idx >= 0 else text
+    m_date = re.search(r"^\*\*Last updated:\*\*\s*(.+)$", chunk, re.MULTILINE)
+    m_agent = re.search(r"^\*\*Agent / tool:\*\*\s*(.+)$", chunk, re.MULTILINE)
+    date_s = (m_date.group(1).strip() if m_date else "").replace("`", "").strip()
+    agent_s = (m_agent.group(1).strip() if m_agent else "").replace("`", "").strip()
+    if not date_s and not agent_s:
+        return ""
+    bits = []
+    if date_s:
+        bits.append(f"**{date_s}**")
+    if agent_s:
+        bits.append(agent_s)
+    return "\n> Last **`SESSION.md`** handoff: " + " · ".join(bits)
+
 
 def _git_log(n: int = 5) -> list[str]:
     try:
@@ -169,8 +199,10 @@ def build_claude_md() -> str:
 
     recent_commits = "\n".join(f"- {c}" for c in _git_log(5)) or "_No git history_"
 
+    session_line = _session_handoff_line()
+
     doc = f"""# Algo Trading System — Project Map
-> Auto-generated on **{now}** — updates automatically every time the app starts.
+> Auto-generated on **{now}** — updates automatically every time the app starts.{session_line}
 
 ---
 
@@ -317,13 +349,19 @@ Navigation: Home → Account → Market → Signals → Trading → Analytics �
 
 ## AI assistants & contributors
 
-Humans and multiple AI tools may edit this repo. **Stable collaboration rules** live in **`AGENTS.md`** (never overwritten by this script).
+Humans and multiple AI tools may edit this repo.
 
-Before risky edits (orders, risk, strategies, broker API): read **`AGENTS.md`**. **`CLAUDE.md` is regenerated** — permanent prose belongs in **`AGENTS.md`** or **`ROADMAP*.md`**, not hand-edited here.
+**Session handoff (manual):** **`SESSION.md`** — update at **end** of each session (last done, next, blockers, agent label). **Read first** when continuing work.
+
+**Stable rules:** **`AGENTS.md`** (never overwritten by this script).
+
+Before risky edits (orders, risk, strategies, broker API): read **`SESSION.md`** → **`AGENTS.md`**. **`CLAUDE.md` is regenerated** — permanent prose belongs in **`AGENTS.md`**, **`SESSION.md`**, or **`ROADMAP*.md`**, not hand-edited here.
 
 **Light Trades L1** DB keys (do not rename casually): `light_l1_config`, `light_l1_enabled`, `light_l1_day_state` in `app_settings`.
 
 After touching execution or indicators: run **`pytest tests/`** when possible and **`python -m py_compile`** on changed files.
+
+**Agent labels in logs:** use `agent-name | summary` (e.g. `cursor-composer`, `claude-sonnet-4.6`) in **`SESSION.md`** or extend this script’s change log template below.
 
 ---
 
@@ -341,6 +379,7 @@ These are the source of truth for what's planned. Tick boxes as you finish. Resu
 ## Change Log
 > One-line notes only — what changed, why, which file. No code.
 
+- 2026-05-02 | cursor-composer | `SESSION.md` handoff + `session-bootstrap.mdc` (alwaysApply) + AGENTS read-order + CLAUDE template SESSION pointer
 - 2026-05-02 | Added `AGENTS.md` + `.cursor/rules/` + CLAUDE.md section — multi-model collaboration; stable keys for Light L1 (`light_l1_*`)
 - 2026-04-26 | Built `signal_engine.py` — 10-indicator confluence scanner for all F&O symbols
 - 2026-04-26 | Built `indicators.py` — weighted scoring system (±15, BUY ≥+6, SELL ≤-6)

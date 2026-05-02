@@ -128,6 +128,12 @@ class BacktestResult:
         return sum(losses) / len(losses) if losses else 0.0
 
     @property
+    def avg_pnl_per_trade(self) -> float:
+        if not self.trades:
+            return 0.0
+        return self.total_pnl / len(self.trades)
+
+    @property
     def profit_factor(self) -> float:
         gross_profit = sum(t.pnl for t in self.winning_trades)
         gross_loss   = abs(sum(t.pnl for t in self.losing_trades))

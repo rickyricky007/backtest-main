@@ -17,14 +17,14 @@ TIMESTAMP=$(date '+%Y-%m-%d %H:%M:%S')
 # ── Install mode: sets up cron job ────────────────────────────────────────────
 if [ "$1" == "--install" ]; then
     echo "Setting up hourly auto-push cron job..."
-
+    
     # Create log directory
     mkdir -p /var/log/algotrading
-
+    
     # Add cron job for algotrading user — runs every hour
     CRON_LINE="0 * * * * bash $APP_DIR/deploy/auto_push.sh >> $LOG_FILE 2>&1"
     (crontab -l 2>/dev/null | grep -v "auto_push"; echo "$CRON_LINE") | crontab -
-
+    
     echo "✅ Cron job installed — auto-push runs every hour"
     echo "   Log: $LOG_FILE"
     crontab -l | grep auto_push
@@ -37,13 +37,13 @@ cd "$APP_DIR" || exit 1
 # Fix safe directory
 git config --global --add safe.directory "$APP_DIR" 2>/dev/null
 
-# Check if there are any changes
-if git diff --quiet && git diff --staged --quiet; then
+# Check if there are any changes (unstaged OR staged OR untracked)
+if [ -z "$(git status --porcelain)" ]; then
     echo "[$TIMESTAMP] No changes — nothing to push"
     exit 0
 fi
 
-# Stage all changes (except .gitignore'd files like .env, dashboard.sqlite)
+# Stage all changes (except .gitignore'd files)
 git add -A
 
 # Commit with timestamp

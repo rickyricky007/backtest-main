@@ -43,6 +43,7 @@ pg = st.navigation(
             st.Page("pages/3_Signals/1_Signal_Scanner.py", title="Signal Scanner", icon="🎯"),
             st.Page("pages/3_Signals/2_Strategy_Hub.py",   title="Strategy Hub",   icon="⚙️"),
             st.Page("pages/3_Signals/3_FO_Dashboard.py",   title="F&O Dashboard",  icon="📋"),
+            st.Page("pages/3_Signals/4_Light_Strategies.py", title="Light Trades", icon="🪶"),
         ],
         "⚡ Trading": [
             st.Page("pages/4_Trading/1_ST_Paper_Trading.py", title="ST Paper Trading", icon="📄"),
