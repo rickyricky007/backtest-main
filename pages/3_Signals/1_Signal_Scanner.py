@@ -91,12 +91,12 @@ engine.symbols = symbols
 col_btn1, col_btn2, col_status = st.columns([1, 1, 4])
 
 with col_btn1:
-    scan_clicked = st.button("🔍 Scan Now", type="primary", use_container_width=True)
+    scan_clicked = st.button("🔍 Scan Now", type="primary", width="stretch")
 
 with col_btn2:
     execute_clicked = st.button(
         "⚡ Scan & Trade",
-        use_container_width=True,
+        width="stretch",
         help="Scan all symbols AND auto-execute signals that pass risk checks"
     )
 
@@ -181,7 +181,7 @@ with tab1:
 
     if rows:
         df = pd.DataFrame(rows)
-        st.dataframe(df, use_container_width=True, hide_index=True, height=500)
+        st.dataframe(df, width="stretch", hide_index=True, height=500)
 
         # Download
         csv = pd.DataFrame(rows).to_csv(index=False)
@@ -239,7 +239,7 @@ with tab2:
 
             st.dataframe(
                 pd.DataFrame(ind_rows),
-                use_container_width=True,
+                width="stretch",
                 hide_index=True
             )
 
@@ -287,7 +287,7 @@ with tab3:
 
                 st.dataframe(
                     pd.DataFrame(ind_rows),
-                    use_container_width=True,
+                    width="stretch",
                     hide_index=True
                 )
 

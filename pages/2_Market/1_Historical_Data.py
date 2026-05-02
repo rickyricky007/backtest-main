@@ -103,7 +103,7 @@ with tab1:
             display_df["datetime"] = display_df["datetime"].astype(str)
             st.dataframe(
                 display_df.sort_values("datetime", ascending=False),
-                use_container_width=True, height=400
+                width="stretch", height=400
             )
 
             # Download
@@ -233,7 +233,7 @@ with tab2:
             display_df["datetime"] = display_df["datetime"].astype(str)
             st.dataframe(
                 display_df.sort_values("datetime", ascending=False),
-                use_container_width=True, height=400
+                width="stretch", height=400
             )
 
             # Download

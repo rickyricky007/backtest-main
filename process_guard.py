@@ -25,6 +25,7 @@ import argparse
 import json
 import os
 import signal
+import socket
 import subprocess
 import sys
 import time
@@ -79,6 +80,47 @@ SERVICES = {
 _processes: dict[str, subprocess.Popen] = {}
 _crash_counts: dict[str, int] = {s: 0 for s in SERVICES}
 _running = True
+
+
+def _port_available(port: int) -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            s.bind(("", port))
+            return True
+        except OSError:
+            return False
+
+
+def _pick_streamlit_port() -> int:
+    """
+    Avoid crash loop when 8501 is already taken (e.g. another Streamlit).
+    Set STREAMLIT_PORT or RICKY_STREAMLIT_PORT to pin a starting port; we scan
+    forward if that port is busy.
+    """
+    raw = os.environ.get("STREAMLIT_PORT") or os.environ.get("RICKY_STREAMLIT_PORT")
+    start = int(raw) if raw and str(raw).isdigit() else 8501
+    for p in range(start, start + 40):
+        if _port_available(p):
+            if p != start:
+                _log(f"Streamlit: port {start} busy — using {p} instead")
+            return p
+    return start
+
+
+def _apply_dashboard_streamlit_port() -> None:
+    port = _pick_streamlit_port()
+    cmd = list(SERVICES["dashboard"]["cmd"])
+    replaced = False
+    for i, arg in enumerate(cmd):
+        if arg.startswith("--server.port="):
+            cmd[i] = f"--server.port={port}"
+            replaced = True
+            break
+    if not replaced:
+        cmd.append(f"--server.port={port}")
+    SERVICES["dashboard"]["cmd"] = cmd
+    _log(f"Dashboard Streamlit → http://127.0.0.1:{port}  (set STREAMLIT_PORT to pin)")
 
 
 # ── Telegram ──────────────────────────────────────────────────────────────────
@@ -252,5 +294,8 @@ if __name__ == "__main__":
         services = ["engine", "ticker"]
     else:
         services = list(SERVICES.keys())
+
+    if "dashboard" in services:
+        _apply_dashboard_streamlit_port()
 
     _monitor_loop(services)

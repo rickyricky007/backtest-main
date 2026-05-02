@@ -26,7 +26,7 @@ def _holdings():
 with st.sidebar:
     st.subheader("Data")
 
-    if st.button("Refresh now", type="primary", use_container_width=True):
+    if st.button("Refresh now", type="primary", width="stretch"):
         _holdings.clear()
         st.rerun()
 
@@ -57,7 +57,7 @@ df = kd.holdings_dataframe(rows)
 if df.empty:
     st.info("No holdings found in your account.")
 else:
-    st.dataframe(df, use_container_width=True, hide_index=True, height=520)
+    st.dataframe(df, width="stretch", hide_index=True, height=520)
 
     st.download_button(
         label="Download CSV",

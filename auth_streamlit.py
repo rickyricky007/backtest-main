@@ -62,7 +62,7 @@ def render_logout_controls(*, key: str = "kite_logout") -> None:
     """Sidebar button to clear the saved Kite session."""
     if not kd.load_access_token():
         return
-    if st.button("🚪 Log out (clear Kite session)", use_container_width=True, key=key):
+    if st.button("🚪 Log out (clear Kite session)", width="stretch", key=key):
         kd.clear_saved_access_token()
         kd.set_ignore_env_access_token(True)
         st.cache_data.clear()

@@ -46,21 +46,26 @@ def _log(
     sq_off: float = 0, stoploss: float = 0, trailing_sl: float = 0,
     reason: str = "", meta: dict | None = None,
     parent_order_id: str = "",
+    signal_price: float = 0.0,
+    fill_price: float = 0.0,
+    slippage_amt: float = 0.0,
+    slippage_pct: float = 0.0,
 ) -> None:
-    """Insert an order record into Supabase."""
+    """Insert an order record (fills `signal_price` / `fill_price` / slippage columns when set)."""
     execute("""
         INSERT INTO engine_orders (
             timestamp, strategy, symbol, exchange, action, order_type,
             variety, product, quantity, price, trigger_price, sq_off,
             stoploss, trailing_sl, mode, order_id,
-            status, notes
-        ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            status, signal_price, fill_price, slippage_amt, slippage_pct, notes
+        ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
     """, (
         datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         strategy, symbol, exchange, action, order_type,
         variety, product, quantity, price, trigger_price, sq_off,
         stoploss, trailing_sl, mode, order_id,
-        status, json.dumps(meta or {}),
+        status, signal_price, fill_price, slippage_amt, slippage_pct,
+        json.dumps(meta or {}),
     ))
 
 
@@ -500,9 +505,26 @@ class OrderManager:
             else:
                 fill_price = round(raw_price * (1 - slip_pct), 2)
             slip_amt = abs(fill_price - raw_price)
+            slip_pct_real = (slip_amt / raw_price * 100.0) if raw_price else 0.0
         else:
             fill_price = 0.0   # true market order — no signal price
             slip_amt   = 0.0
+            slip_pct_real = 0.0
+
+        meta_out = {**(kw.get("meta") or {}),
+                    "signal_price": raw_price,
+                    "fill_price":   fill_price,
+                    "slippage_amt": slip_amt,
+                    "slippage_pct": round(slip_pct * 100, 4)}
+
+        if exchange == "NFO" and ("CE" in kw["symbol"] or "PE" in kw["symbol"]):
+            try:
+                import kite_data as kd
+                ivq = kd.option_quote_iv(kw["symbol"], exchange)
+                if ivq is not None:
+                    meta_out["iv_quote"] = round(ivq, 4)
+            except Exception:
+                pass
 
         _log(
             symbol=kw["symbol"], action=action,
@@ -516,11 +538,11 @@ class OrderManager:
             stoploss=kw.get("stoploss", 0),
             trailing_sl=kw.get("trailing_sl", 0),
             reason=kw.get("reason", ""),
-            meta={**(kw.get("meta") or {}),
-                  "signal_price": raw_price,
-                  "fill_price":   fill_price,
-                  "slippage_amt": slip_amt,
-                  "slippage_pct": round(slip_pct * 100, 4)},
+            meta=meta_out,
+            signal_price=raw_price,
+            fill_price=fill_price,
+            slippage_amt=slip_amt,
+            slippage_pct=round(slip_pct_real, 6),
         )
         log.info(f"✅ Paper filled: {order_id} @ ₹{fill_price:.2f} (signal ₹{raw_price:.2f}, slip ₹{slip_amt:.2f})")
         return {
@@ -600,6 +622,10 @@ class OrderManager:
                 trailing_sl=kw.get("trailing_sl", 0),
                 reason=kw.get("reason", ""),
                 meta=kw.get("meta"),
+                signal_price=float(kw.get("price") or 0),
+                fill_price=0.0,
+                slippage_amt=0.0,
+                slippage_pct=0.0,
             )
 
             log.info(f"✅ Live order placed: {order_id}")
@@ -615,6 +641,10 @@ class OrderManager:
                 strategy=kw.get("strategy", ""),
                 exchange=kw.get("exchange", "NSE"),
                 reason=str(e),
+                signal_price=float(kw.get("price") or 0),
+                fill_price=0.0,
+                slippage_amt=0.0,
+                slippage_pct=0.0,
             )
             log.error(f"Order placement failed: {e}", exc_info=True)
             return {"error": str(e)}

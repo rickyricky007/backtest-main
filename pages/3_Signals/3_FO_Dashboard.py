@@ -251,7 +251,7 @@ if not instr.empty:
             .apply(_cal_color, axis=1)
             .format({"Days": "{} days"})
         )
-        st.dataframe(styled_cal, use_container_width=True)
+        st.dataframe(styled_cal, width="stretch")
 
         # Rollover alerts
         urgent = cal[cal["Days"] <= 3]
@@ -348,7 +348,7 @@ else:
             "Theta": "{:.2f}", "Vega": "{:.4f}",
             "P&L": "₹{:,.0f}",
         }),
-        use_container_width=True,
+        width="stretch",
     )
 
     # Greeks risk warnings

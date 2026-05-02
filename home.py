@@ -60,7 +60,7 @@ def _invalidate_caches() -> None:
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.subheader("Data")
-    if st.button("Refresh now", type="primary", use_container_width=True):
+    if st.button("Refresh now", type="primary", width="stretch"):
         _invalidate_caches()
         st.rerun()
     st.caption("Cached ~15s for account, ~60s for indices.")
@@ -180,9 +180,9 @@ left, right = st.columns(2)
 with left:
     st.subheader("Holdings preview")
     hdf = kd.holdings_dataframe(holdings)
-    st.dataframe(hdf, use_container_width=True, hide_index=True, height=280)
+    st.dataframe(hdf, width="stretch", hide_index=True, height=280)
 
 with right:
     st.subheader("Intraday positions preview")
     pdf = kd.positions_dataframe(positions.get("day") or [])
-    st.dataframe(pdf, use_container_width=True, hide_index=True, height=280)
+    st.dataframe(pdf, width="stretch", hide_index=True, height=280)

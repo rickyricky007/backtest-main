@@ -243,23 +243,25 @@ def run_light_l1_backtest(
 
             exit_reason: str | None = None
 
-            if _eod_exit_due(cfg, now):
+            if cfg.use_exit_eod and _eod_exit_due(cfg, now):
                 exit_reason = "EOD square-off"
-            else:
+            elif cfg.use_exit_time_stop:
                 elapsed_min = (now - leg["entry_time"]).total_seconds() / 60.0
                 if elapsed_min >= cfg.time_stop_min:
                     exit_reason = f"Time stop ({cfg.time_stop_min} min)"
-                else:
-                    tp = entry * (1.0 + cfg.profit_target_pct / 100.0)
-                    sl = entry * (1.0 - cfg.stop_loss_pct / 100.0)
-                    if ltp >= tp:
-                        exit_reason = f"Profit target +{cfg.profit_target_pct}%"
-                    elif ltp <= sl:
-                        exit_reason = f"Stop loss -{cfg.stop_loss_pct}%"
-                    elif opt_type == "CE" and rsi > cfg.rsi_exit_ce_above:
-                        exit_reason = f"RSI exit CE (RSI={rsi} > {cfg.rsi_exit_ce_above})"
-                    elif opt_type == "PE" and rsi < cfg.rsi_exit_pe_below:
-                        exit_reason = f"RSI exit PE (RSI={rsi} < {cfg.rsi_exit_pe_below})"
+            if exit_reason is None and cfg.use_exit_profit_target:
+                tp = entry * (1.0 + cfg.profit_target_pct / 100.0)
+                if ltp >= tp:
+                    exit_reason = f"Profit target +{cfg.profit_target_pct}%"
+            if exit_reason is None and cfg.use_exit_stop_loss:
+                sl = entry * (1.0 - cfg.stop_loss_pct / 100.0)
+                if ltp <= sl:
+                    exit_reason = f"Stop loss -{cfg.stop_loss_pct}%"
+            if exit_reason is None and cfg.use_exit_rsi:
+                if opt_type == "CE" and rsi > cfg.rsi_exit_ce_above:
+                    exit_reason = f"RSI exit CE (RSI={rsi} > {cfg.rsi_exit_ce_above})"
+                elif opt_type == "PE" and rsi < cfg.rsi_exit_pe_below:
+                    exit_reason = f"RSI exit PE (RSI={rsi} < {cfg.rsi_exit_pe_below})"
 
             if exit_reason:
                 qty = int(leg["qty"])
@@ -293,7 +295,9 @@ def run_light_l1_backtest(
             and not day_st.halted
             and not skip_new_entry
         ):
-            if day_st.trades_today < cfg.max_trades_per_day and _in_entry_window(cfg, now):
+            if day_st.trades_today < cfg.max_trades_per_day and (
+                not cfg.use_entry_window or _in_entry_window(cfg, now)
+            ):
                 prev = prev_rsi
                 ce_cross = (
                     prev is not None

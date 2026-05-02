@@ -416,10 +416,10 @@ with tab1:
                 "ATM":      lambda v: "★ ATM" if v else "",
             })
         )
-        st.dataframe(styled, use_container_width=True, height=600)
+        st.dataframe(styled, width="stretch", height=600)
     except Exception:
         # Fallback without styling (if jinja2 not installed)
-        st.dataframe(display, use_container_width=True, height=600)
+        st.dataframe(display, width="stretch", height=600)
         st.caption("ℹ️ Install jinja2 for colour highlighting: `pip install jinja2`")
 
     # Download
@@ -449,7 +449,7 @@ with tab2:
     )
     pcr_display = chain_pcr[["Strike", "CE_OI", "PE_OI", "PCR"]].copy()
     pcr_display["Strike"] = pcr_display["Strike"].apply(lambda x: f"₹{x:,.0f}")
-    st.dataframe(pcr_display, use_container_width=True, hide_index=True)
+    st.dataframe(pcr_display, width="stretch", hide_index=True)
 
 # ── TAB 3: Strategy Launcher ──────────────────────────────────────────────────
 with tab3:

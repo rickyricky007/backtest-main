@@ -100,12 +100,15 @@ def _pick_option_contract(
     nearest = future_exp[0]
 
     strike_rows = [r for r in rows if _expiry_as_date(r["expiry"]) == nearest]
-    candidates: list[dict[str, Any]] = []
-    for r in strike_rows:
-        strike = float(r["strike"])
-        dist = _otm_distance(opt_type, strike, spot)
-        if cfg.otm_distance_min <= dist <= cfg.otm_distance_max:
-            candidates.append(r)
+    if cfg.use_otm_distance_filter:
+        candidates: list[dict[str, Any]] = []
+        for r in strike_rows:
+            strike = float(r["strike"])
+            dist = _otm_distance(opt_type, strike, spot)
+            if cfg.otm_distance_min <= dist <= cfg.otm_distance_max:
+                candidates.append(r)
+    else:
+        candidates = list(strike_rows)
 
     if not candidates:
         return None
@@ -141,9 +144,11 @@ def _pick_option_contract(
         if ltp is None:
             continue
         ltp = float(ltp)
-        if cfg.min_premium <= ltp <= cfg.max_premium:
-            lot = int(r.get("lot_size") or 50)
-            return (sym, ltp, lot)
+        if cfg.use_premium_band:
+            if not (cfg.min_premium <= ltp <= cfg.max_premium):
+                continue
+        lot = int(r.get("lot_size") or 50)
+        return (sym, ltp, lot)
     return None
 
 
@@ -261,30 +266,35 @@ class LightNiftyRSIStrategy(BaseStrategy):
         entry = float(leg["entry_price"])
         opt_type = leg["opt_type"]
 
-        if self._eod_exit_due(cfg, now):
+        if cfg.use_exit_eod and self._eod_exit_due(cfg, now):
             self._open_leg = None
             return self._exit_signal(leg, ltp, "EOD square-off", cfg)
 
-        elapsed_min = (now - leg["entry_time"]).total_seconds() / 60.0
-        if elapsed_min >= cfg.time_stop_min:
-            self._open_leg = None
-            return self._exit_signal(leg, ltp, f"Time stop ({cfg.time_stop_min} min)", cfg)
+        if cfg.use_exit_time_stop:
+            elapsed_min = (now - leg["entry_time"]).total_seconds() / 60.0
+            if elapsed_min >= cfg.time_stop_min:
+                self._open_leg = None
+                return self._exit_signal(leg, ltp, f"Time stop ({cfg.time_stop_min} min)", cfg)
 
-        tp = entry * (1.0 + cfg.profit_target_pct / 100.0)
-        sl = entry * (1.0 - cfg.stop_loss_pct / 100.0)
-        if ltp >= tp:
-            self._open_leg = None
-            return self._exit_signal(leg, ltp, f"Profit target +{cfg.profit_target_pct}%", cfg)
-        if ltp <= sl:
-            self._open_leg = None
-            return self._exit_signal(leg, ltp, f"Stop loss -{cfg.stop_loss_pct}%", cfg)
+        if cfg.use_exit_profit_target:
+            tp = entry * (1.0 + cfg.profit_target_pct / 100.0)
+            if ltp >= tp:
+                self._open_leg = None
+                return self._exit_signal(leg, ltp, f"Profit target +{cfg.profit_target_pct}%", cfg)
 
-        if opt_type == "CE" and rsi > cfg.rsi_exit_ce_above:
-            self._open_leg = None
-            return self._exit_signal(leg, ltp, f"RSI exit CE (RSI={rsi} > {cfg.rsi_exit_ce_above})", cfg)
-        if opt_type == "PE" and rsi < cfg.rsi_exit_pe_below:
-            self._open_leg = None
-            return self._exit_signal(leg, ltp, f"RSI exit PE (RSI={rsi} < {cfg.rsi_exit_pe_below})", cfg)
+        if cfg.use_exit_stop_loss:
+            sl = entry * (1.0 - cfg.stop_loss_pct / 100.0)
+            if ltp <= sl:
+                self._open_leg = None
+                return self._exit_signal(leg, ltp, f"Stop loss -{cfg.stop_loss_pct}%", cfg)
+
+        if cfg.use_exit_rsi:
+            if opt_type == "CE" and rsi > cfg.rsi_exit_ce_above:
+                self._open_leg = None
+                return self._exit_signal(leg, ltp, f"RSI exit CE (RSI={rsi} > {cfg.rsi_exit_ce_above})", cfg)
+            if opt_type == "PE" and rsi < cfg.rsi_exit_pe_below:
+                self._open_leg = None
+                return self._exit_signal(leg, ltp, f"RSI exit PE (RSI={rsi} < {cfg.rsi_exit_pe_below})", cfg)
 
         return None
 
@@ -314,6 +324,9 @@ class LightNiftyRSIStrategy(BaseStrategy):
                 "entry_price": entry,
                 "opt_type": leg["opt_type"],
                 "pnl_per_lot_approx": round(win, 2),
+                "mid_premium_assumption": round(
+                    (cfg.min_premium + cfg.max_premium) / 2.0, 2
+                ),
             },
         )
 
@@ -358,7 +371,7 @@ class LightNiftyRSIStrategy(BaseStrategy):
             self._prev_rsi = rsi
             return None
 
-        if not self._in_entry_window(cfg, now):
+        if cfg.use_entry_window and not self._in_entry_window(cfg, now):
             self._prev_rsi = rsi
             return None
 
@@ -395,6 +408,7 @@ class LightNiftyRSIStrategy(BaseStrategy):
                 day_state.trades_today += 1
                 save_day_state(day_state)
                 self._signal_count += 1
+                mid_sim = round((cfg.min_premium + cfg.max_premium) / 2.0, 2)
                 signal = Signal(
                     strategy=self.name,
                     symbol=sym,
@@ -403,7 +417,12 @@ class LightNiftyRSIStrategy(BaseStrategy):
                     quantity=qty,
                     price=float(ltp),
                     reason=f"Light L1 CE — RSI crossed below {cfg.rsi_buy_ce_below} (RSI={rsi})",
-                    meta={"spot": price, "rsi": rsi, "opt_type": "CE"},
+                    meta={
+                        "spot": price,
+                        "rsi": rsi,
+                        "opt_type": "CE",
+                        "mid_premium_assumption": mid_sim,
+                    },
                 )
 
         elif pe_cross and not ce_cross:
@@ -421,6 +440,7 @@ class LightNiftyRSIStrategy(BaseStrategy):
                 day_state.trades_today += 1
                 save_day_state(day_state)
                 self._signal_count += 1
+                mid_sim = round((cfg.min_premium + cfg.max_premium) / 2.0, 2)
                 signal = Signal(
                     strategy=self.name,
                     symbol=sym,
@@ -429,7 +449,12 @@ class LightNiftyRSIStrategy(BaseStrategy):
                     quantity=qty,
                     price=float(ltp),
                     reason=f"Light L1 PE — RSI crossed above {cfg.rsi_buy_pe_above} (RSI={rsi})",
-                    meta={"spot": price, "rsi": rsi, "opt_type": "PE"},
+                    meta={
+                        "spot": price,
+                        "rsi": rsi,
+                        "opt_type": "PE",
+                        "mid_premium_assumption": mid_sim,
+                    },
                 )
 
         elif ce_cross and pe_cross:

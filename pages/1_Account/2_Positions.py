@@ -41,7 +41,7 @@ def _positions():
 with st.sidebar:
     st.subheader("Data")
 
-    if st.button("Refresh now", type="primary", use_container_width=True):
+    if st.button("Refresh now", type="primary", width="stretch"):
         _positions.clear()
         st.rerun()
 
@@ -79,7 +79,7 @@ with tab_day:
     if dfd.empty:
         st.info("No open day positions.")
     else:
-        st.dataframe(dfd, use_container_width=True, hide_index=True, height=480)
+        st.dataframe(dfd, width="stretch", hide_index=True, height=480)
 
         # 🔔 P&L Alert (only once per threshold)
         if "pnl" in dfd.columns:
@@ -122,4 +122,4 @@ with tab_net:
     if dfn.empty:
         st.info("No net positions.")
     else:
-        st.dataframe(dfn, use_container_width=True, hide_index=True, height=480)
+        st.dataframe(dfn, width="stretch", hide_index=True, height=480)

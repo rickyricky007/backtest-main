@@ -481,21 +481,21 @@ with st.sidebar:
     st.divider()
 
     # WHY: Confirm before reset — prevents accidental wipe of all paper trades
-    if st.button("🔄 Reset F&O Portfolio", use_container_width=True):
+    if st.button("🔄 Reset F&O Portfolio", width="stretch"):
         st.session_state["confirm_reset_fo"] = True
 
     if st.session_state.get("confirm_reset_fo"):
         st.warning("⚠️ This will delete ALL paper trades and reset capital!")
         cy, cn = st.columns(2)
         with cy:
-            if st.button("✅ Yes, Reset", use_container_width=True, key="reset_yes"):
+            if st.button("✅ Yes, Reset", width="stretch", key="reset_yes"):
                 save_fo_portfolio({"cash": STARTING_CAPITAL, "positions": {}})
                 save_fo_trades([])
                 st.session_state.pop("confirm_reset_fo", None)
                 st.success(f"Reset to ₹{STARTING_CAPITAL:,.0f}!")
                 st.rerun()
         with cn:
-            if st.button("❌ Cancel", use_container_width=True, key="reset_no"):
+            if st.button("❌ Cancel", width="stretch", key="reset_no"):
                 st.session_state.pop("confirm_reset_fo", None)
                 st.rerun()
 
@@ -621,7 +621,7 @@ with tab1:
         f"{'🟢 BUY' if action == 'BUY' else '🔴 SELL'} "
         f"{underlying} {strike} {opt_type}  |  {expiry}"
     )
-    if st.button(btn_label, type="primary", use_container_width=True):
+    if st.button(btn_label, type="primary", width="stretch"):
         result = place_fo_order(
             instrument_type=inst_type,
             underlying=underlying,
@@ -714,7 +714,7 @@ with tab2:
                 "showing avg buy price. P&L for those rows is ₹ 0 (not actual gain/loss)."
             )
 
-        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
 
         total_pnl     = total_current - total_invested
         total_pnl_pct = (total_pnl / total_invested * 100) if total_invested else 0.0
@@ -752,7 +752,7 @@ with tab3:
         tdf["Price"] = tdf["Price"].apply(lambda x: f"₹ {x:,.2f}")
         tdf["Total"] = tdf["Total"].apply(lambda x: f"₹ {x:,.2f}")
 
-        st.dataframe(tdf, use_container_width=True, hide_index=True, height=400)
+        st.dataframe(tdf, width="stretch", hide_index=True, height=400)
         st.caption(f"Total trades recorded: **{len(trades)}**")
 
         # WHY: Confirm before clearing — deleted history can't be recovered
@@ -763,13 +763,13 @@ with tab3:
             st.warning("⚠️ This permanently deletes all trade history!")
             cy2, cn2 = st.columns(2)
             with cy2:
-                if st.button("✅ Yes, Clear", use_container_width=True, key="clear_yes"):
+                if st.button("✅ Yes, Clear", width="stretch", key="clear_yes"):
                     save_fo_trades([])
                     st.session_state.pop("confirm_clear_hist", None)
                     st.success("Trade history cleared.")
                     st.rerun()
             with cn2:
-                if st.button("❌ Cancel", use_container_width=True, key="clear_no"):
+                if st.button("❌ Cancel", width="stretch", key="clear_no"):
                     st.session_state.pop("confirm_clear_hist", None)
                     st.rerun()
 
@@ -797,7 +797,7 @@ with tab4:
             Total_Premium = ("total",  "sum"),
         ).reset_index()
         summary["Total_Premium"] = summary["Total_Premium"].apply(lambda x: f"₹ {x:,.2f}")
-        st.dataframe(summary, use_container_width=True, hide_index=True)
+        st.dataframe(summary, width="stretch", hide_index=True)
 
         # ── By Date ────────────────────────────────────────────────────────
         # WHY: Track your trading activity per day — helps spot overtrading
@@ -810,7 +810,7 @@ with tab4:
             .sort_values("date", ascending=False)
         )
         daily["Total_Premium"] = daily["Total_Premium"].apply(lambda x: f"₹ {x:,.2f}")
-        st.dataframe(daily, use_container_width=True, hide_index=True)
+        st.dataframe(daily, width="stretch", hide_index=True)
 
         # ── Capital summary ────────────────────────────────────────────────
         # WHY: Realized P&L = what you received selling minus what you paid buying.

@@ -32,7 +32,7 @@ def _margins():
 
 with st.sidebar:
     st.subheader("Data")
-    if st.button("Refresh now", type="primary", use_container_width=True, key="refresh_funds"):
+    if st.button("Refresh now", type="primary", width="stretch", key="refresh_funds"):
         _margins.clear()
         st.rerun()
     st.caption("Cached up to ~15s.")

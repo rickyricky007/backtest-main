@@ -351,6 +351,59 @@ def _init_sqlite() -> None:
             )
         """)
 
+        _migrate_sqlite_engine_orders(conn)
+
+
+def _migrate_sqlite_engine_orders(conn: sqlite3.Connection) -> None:
+    """
+    Older dashboards created `engine_orders` with `created_at` and fewer columns.
+    `CREATE TABLE IF NOT EXISTS` leaves that schema in place — align columns with `_init_sqlite`.
+    """
+    cur = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='engine_orders'"
+    )
+    if cur.fetchone() is None:
+        return
+
+    cur = conn.execute("PRAGMA table_info(engine_orders)")
+    cols = {row[1] for row in cur.fetchall()}
+
+    # Same column set as used by `order_manager._log` INSERT.
+    additions: list[tuple[str, str]] = [
+        ("timestamp", "TEXT NOT NULL DEFAULT ''"),
+        ("strategy", "TEXT NOT NULL DEFAULT ''"),
+        ("exchange", "TEXT NOT NULL DEFAULT 'NSE'"),
+        ("order_type", "TEXT NOT NULL DEFAULT 'MARKET'"),
+        ("variety", "TEXT NOT NULL DEFAULT 'REGULAR'"),
+        ("product", "TEXT NOT NULL DEFAULT 'MIS'"),
+        ("sq_off", "REAL NOT NULL DEFAULT 0"),
+        ("stoploss", "REAL NOT NULL DEFAULT 0"),
+        ("trailing_sl", "REAL NOT NULL DEFAULT 0"),
+        ("mode", "TEXT NOT NULL DEFAULT 'PAPER'"),
+        ("order_id", "TEXT NOT NULL DEFAULT ''"),
+        ("status", "TEXT NOT NULL DEFAULT 'OPEN'"),
+        ("fill_price", "REAL NOT NULL DEFAULT 0"),
+        ("signal_price", "REAL NOT NULL DEFAULT 0"),
+        ("slippage_amt", "REAL NOT NULL DEFAULT 0"),
+        ("slippage_pct", "REAL NOT NULL DEFAULT 0"),
+        ("notes", "TEXT NOT NULL DEFAULT ''"),
+    ]
+    for col_name, decl in additions:
+        if col_name not in cols:
+            conn.execute(f"ALTER TABLE engine_orders ADD COLUMN {col_name} {decl}")
+
+    cur = conn.execute("PRAGMA table_info(engine_orders)")
+    cols_after = {row[1] for row in cur.fetchall()}
+    if "timestamp" in cols_after and "created_at" in cols_after:
+        conn.execute(
+            """
+            UPDATE engine_orders
+            SET timestamp = COALESCE(NULLIF(TRIM(timestamp), ''), created_at)
+            WHERE (timestamp IS NULL OR TRIM(timestamp) = '')
+              AND created_at IS NOT NULL AND TRIM(created_at) != ''
+            """
+        )
+
 
 # ── Auto-init on import ───────────────────────────────────────────────────────
 try:

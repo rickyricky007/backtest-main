@@ -100,7 +100,7 @@ with st.sidebar:
                                 help="Marks confluence engine signals on chart")
 
     st.divider()
-    refresh = st.button("🔄 Refresh Chart", type="primary", use_container_width=True)
+    refresh = st.button("🔄 Refresh Chart", type="primary", width="stretch")
 
     # Market session info
     st.divider()
@@ -491,7 +491,7 @@ try:
     fig.update_xaxes(showgrid=True, gridcolor="rgba(255,255,255,0.05)")
     fig.update_yaxes(showgrid=True, gridcolor="rgba(255,255,255,0.05)")
 
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
 
     # ── Signal summary ────────────────────────────────────────────────────────
     if show_signals and len(df) > 60:
@@ -506,7 +506,7 @@ try:
                 )
                 st.dataframe(display_sigs.rename(columns={
                     "dt": "Time", "price": "Price", "action": "Signal", "score": "Score"
-                }), hide_index=True, use_container_width=True)
+                }), hide_index=True, width="stretch")
 
 except ImportError:
     st.error("Plotly not installed. Run: `pip install plotly`")
@@ -521,7 +521,7 @@ with st.expander("📄 Raw OHLCV Data", expanded=False):
     display_df = df.copy()
     display_df.index = display_df.index.strftime("%d %b %Y %H:%M")
     display_df = display_df.tail(200)
-    st.dataframe(display_df.round(2), use_container_width=True)
+    st.dataframe(display_df.round(2), width="stretch")
 
     csv = df.to_csv()
     st.download_button(

@@ -187,6 +187,38 @@ def positions_dataframe(rows: list[dict[str, Any]]) -> pd.DataFrame:
     return df[cols + extra]
 
 
+def option_quote_iv(tradingsymbol: str, exchange: str = "NFO") -> float | None:
+    """
+    Best-effort implied volatility from a Kite LTP quote (options only).
+    Returns None if the API does not expose IV for this instrument.
+    """
+    if exchange.upper() != "NFO":
+        return None
+    if "CE" not in tradingsymbol.upper() and "PE" not in tradingsymbol.upper():
+        return None
+    try:
+        kite = kite_client()
+        key = f"{exchange.upper()}:{tradingsymbol}"
+        data = kite.quote([key])
+        row = data.get(key)
+        if not isinstance(row, dict):
+            return None
+        g = row.get("greeks") or row.get("Greeks")
+        if isinstance(g, dict):
+            v = g.get("iv") or g.get("IV")
+            if v is not None:
+                return float(v)
+        for k in ("iv", "IV", "implied_volatility"):
+            if k in row and row[k] is not None:
+                try:
+                    return float(row[k])
+                except (TypeError, ValueError):
+                    continue
+    except Exception:
+        pass
+    return None
+
+
 def fetch_historical(symbol: str, exchange: str, interval: str, from_date: str, to_date: str) -> pd.DataFrame:
     """Fetch historical OHLCV data from Kite."""
     kite             = kite_client()

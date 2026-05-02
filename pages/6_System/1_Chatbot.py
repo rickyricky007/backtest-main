@@ -784,7 +784,7 @@ with st.sidebar:
         accept_multiple_files=True
     )
     st.divider()
-    if st.button("🗑️ Clear Chat", use_container_width=True):
+    if st.button("🗑️ Clear Chat", width="stretch"):
         st.session_state.messages = []
         st.rerun()
     st.divider()

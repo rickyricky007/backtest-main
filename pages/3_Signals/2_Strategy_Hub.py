@@ -238,7 +238,7 @@ with tab1:
             lambda x: f"₹{x:+,.0f}" if isinstance(x, (int, float)) else x
         )
 
-        st.dataframe(df, use_container_width=True, hide_index=True)
+        st.dataframe(df, width="stretch", hide_index=True)
 
         # Summary metrics
         total_pnl    = sum(r["Today P&L"] for r in rows)
@@ -349,7 +349,7 @@ with tab3:
         if search_sym:
             filtered = filtered[filtered["symbol"].str.contains(search_sym.upper(), na=False)]
 
-        st.dataframe(filtered, use_container_width=True, hide_index=True)
+        st.dataframe(filtered, width="stretch", hide_index=True)
 
         # Download
         csv = filtered.to_csv(index=False)
@@ -411,7 +411,7 @@ with tab4:
             perf_df[col] = perf_df[col].apply(lambda x: f"₹{x:+,.0f}" if isinstance(x, (int, float)) else x)
         perf_df["Win Rate %"] = perf_df["Win Rate %"].apply(lambda x: f"{x:.1f}%" if isinstance(x, (int, float)) else x)
 
-        st.dataframe(perf_df, use_container_width=True, hide_index=True)
+        st.dataframe(perf_df, width="stretch", hide_index=True)
 
         # Best strategy highlight
         best = perf_df.iloc[0]

@@ -243,7 +243,7 @@ with tab2:
         ).reset_index().sort_values("pnl", ascending=False)
         st.dataframe(
             setup_grp.style.format({"pnl": "₹{:,.0f}", "win_rate": "{:.1f}%"}),
-            use_container_width=True,
+            width="stretch",
         )
 
         # Emotion analysis
@@ -255,7 +255,7 @@ with tab2:
         ).reset_index().sort_values("pnl", ascending=False)
         st.dataframe(
             emo_grp.style.format({"pnl": "₹{:,.0f}", "win_rate": "{:.1f}%"}),
-            use_container_width=True,
+            width="stretch",
         )
         st.caption("💡 Track which emotions lead to your best and worst trades")
 
@@ -293,7 +293,7 @@ with tab3:
                 else ("color:#ef4444" if isinstance(v, (int, float)) and v < 0 else ""),
                 subset=["pnl"],
             ),
-            use_container_width=True,
+            width="stretch",
         )
 
         # Delete a trade

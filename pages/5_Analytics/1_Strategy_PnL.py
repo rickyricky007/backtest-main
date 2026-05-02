@@ -219,7 +219,7 @@ else:
         "win_rate":  "{:.1f}%",
         "profit_factor": "{:.2f}",
     }).background_gradient(subset=["total_pnl"], cmap="RdYlGn")
-    st.dataframe(styled_summary, use_container_width=True)
+    st.dataframe(styled_summary, width="stretch")
 
     # Per-strategy equity curves
     st.subheader("📊 Per-Strategy Equity Curves")
@@ -262,7 +262,7 @@ else:
         ["order_id", "symbol", "action", "order_type", "quantity",
          "price", "status", "strategy", "fill_price", "created_at"]
     ].style.apply(_color_status, axis=1)
-    st.dataframe(styled_orders, use_container_width=True)
+    st.dataframe(styled_orders, width="stretch")
 
 # ── Trade log ─────────────────────────────────────────────────────────────────
 st.divider()
@@ -295,7 +295,7 @@ if not trades.empty:
                 subset=["pnl"]
             )
         )
-        st.dataframe(styled_trades, use_container_width=True)
+        st.dataframe(styled_trades, width="stretch")
 
         # CSV download
         csv = filtered.to_csv(index=False)

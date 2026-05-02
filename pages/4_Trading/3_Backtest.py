@@ -153,7 +153,7 @@ def _render_result(result: BacktestResult, label: str = "Backtest Result") -> No
                 else ("color:#ef4444" if isinstance(v, (int, float)) and v < 0 else ""),
                 subset=["P&L"],
             ),
-            use_container_width=True,
+            width="stretch",
         )
 
         # Download
@@ -325,7 +325,7 @@ with tab2:
                                 "Train Sharpe": "{:.2f}", "Test Sharpe": "{:.2f}",
                                 "Train Win%": "{:.1f}%", "Test Win%": "{:.1f}%",
                             }),
-                            use_container_width=True,
+                            width="stretch",
                         )
                         total_test_pnl = sum(r[1].total_pnl for r in windows)
                         avg_test_sharpe = sum(r[1].sharpe_ratio for r in windows) / len(windows)
@@ -449,7 +449,7 @@ with tab3:
                                 "Sortino": "{:.2f}", "Win%": "{:.1f}%",
                                 "Profit Factor": "{:.2f}", "Max DD": "₹{:,.0f}",
                             }).background_gradient(subset=["Sharpe"], cmap="RdYlGn"),
-                            use_container_width=True,
+                            width="stretch",
                         )
                         best_params, best_result = results[0]
                         st.markdown("### 🏆 Best Parameters")
