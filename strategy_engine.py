@@ -35,7 +35,7 @@ from order_manager    import OrderManager
 from risk_manager     import RiskManager
 from stop_loss_manager import StopLossManager
 from regime_filter    import RegimeTracker
-from strategies       import RSIStrategy, SMAStrategy
+from strategies       import RSIStrategy, SMAStrategy, LightNiftyRSIStrategy
 
 log = get_logger("strategy_engine")
 
@@ -74,6 +74,9 @@ ACTIVE_STRATEGIES = [
         fast     = 20,
         slow     = 50,
     ),
+
+    # Light Trades L1 — gated by app_settings `light_l1_enabled` (see 4_Light_Strategies page)
+    LightNiftyRSIStrategy(enabled=True),
 
     # ── Add more strategies here ────────────────────────────────────────────
     # SMAStrategy(symbol="TCS", quantity=1, mode="PAPER"),
@@ -200,7 +203,10 @@ def on_ticks(ws, ticks):
                     _send_alert(sig)
 
                     # ── Register position with SL Manager ─────────────────────
-                    if sig.action in ("BUY", "SELL"):
+                    if (
+                        sig.action in ("BUY", "SELL")
+                        and not getattr(strat, "manages_own_exits", False)
+                    ):
                         sl_cfg = SL_CONFIG.get(sig.symbol, {
                             "sl_points":  20.0,
                             "target_pts": 40.0,

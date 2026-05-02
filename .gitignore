@@ -49,3 +49,12 @@ backups/
 
 # claude notes
 CLAUDE.md
+
+# sqlite temp files
+*.sqlite-wal
+*.sqlite-shm
+
+# local md files
+AGENTS.md
+ROADMAP1.md
+ROADMAP2.md

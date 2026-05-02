@@ -44,6 +44,7 @@ STRATEGY_REGIMES: dict[str, list[str]] = {
 
     # Mean-reversion / premium selling — need range to work
     "RSI":            ["RANGING"],
+    "Light_NIFTY_RSI": ["RANGING"],
     "SHORT_STRADDLE": ["RANGING"],
     "SHORT_STRANGLE_2x": ["RANGING"],
     "SHORT_STRANGLE_3x": ["RANGING"],
