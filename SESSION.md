@@ -41,11 +41,16 @@ Use so logs stay searchable:
 
 ## Current session (latest)
 
-**Last updated:** 2026-05-02 · **~19:40 IST** (Indian Standard Time, Asia/Kolkata)  
+**Last updated:** 2026-05-02 · **~22:02 IST** (Indian Standard Time, Asia/Kolkata)  
 **Agent / tool:** `cursor-composer`
 
 **Done this session** *(agent: **`cursor-composer`**)*
 - **Light L1 rule-group toggles:** Eight `use_*` booleans on **`LightNiftyRSIConfig`** — entry window, OTM filter, premium band; exits EOD / time / TP / SL / RSI. Form section **Rule toggles** on Light Trades; save requires ≥1 exit rule. **`light_nifty_rsi`** + **`light_l1_backtest`** honour the same flags (backtest caption: OTM/premium affect live pick only).
+- **Resilience fixes:** Added SQLite `engine_orders` migration in **`db.py`** (legacy `created_at` schemas upgraded to include `timestamp` + fill/slippage columns); replaced non-archive Streamlit `use_container_width` with `width` API.
+- **Runtime setup:** Installed **`psycopg2-binary`** in active runtime; DB now initializes as **PostgreSQL primary** when `DATABASE_URL` is set.
+- **Local startup UX:** Added one-command **`deploy/local_startup.sh`** and **`make local-start`** — opens login URL, accepts request token, exchanges token, then starts **`process_guard.py`**.
+- **Ops hardening:** `process_guard.py` now auto-picks a free Streamlit port (or uses `STREAMLIT_PORT`) to avoid dashboard crash loops when 8501 is busy.
+- **Safety guardrails:** `deploy/local_startup.sh` now enforces `venv/bin/python` by default with explicit checks and clearer failure messages.
 - **Light Trades — mission control:** **LIVE** error banner, 6-tile row (mode, engine, trades, halted, consecutive losses, last order time + detail), caps caption, CLI hint.
 - **Named profiles:** **`light_l1_profiles`** in **`app_settings`** (max 20) — `load/save/delete` in **`light_strategy_config.py`**, expander on Light Trades to apply/save/delete.
 - **Readiness:** **`scripts/check_light_ready.py`**, **`Makefile`** targets **`status` / `light-status`** (run from **`ricky_1/`**).
@@ -60,7 +65,8 @@ Use so logs stay searchable:
 - [ ] **Pick best 2 configs → paper ~2 weeks** — roadmap **manual** step; **override OK** if you go straight to small LIVE / skip extended paper.
 
 **Next**
-- Run **`make status`** (from **`ricky_1/`**) before market; exercise **mission control** + **named profiles**; keep **PAPER** until you intentionally switch **LIVE** in the form.
+- Run **`make local-start`** and verify login/token flow + watchdog startup from one command; confirm dashboard URL/port printed by `process_guard`.
+- Run **`make status`** before market; keep **PAPER** until you intentionally switch **LIVE** in the form.
 
 **Blockers**
 - None.
@@ -70,6 +76,10 @@ Use so logs stay searchable:
 - `ricky_1/strategies/light_nifty_rsi.py`
 - `ricky_1/light_l1_backtest.py`
 - `ricky_1/pages/3_Signals/4_Light_Strategies.py`
+- `ricky_1/process_guard.py`
+- `ricky_1/deploy/local_startup.sh`
+- `ricky_1/db.py`
+- `ricky_1/Makefile`
 - `ricky_1/AGENTS.md`
 - `ricky_1/SESSION.md`
 - `ricky_1/CLAUDE.md` (via `update_docs.py` after this edit)
