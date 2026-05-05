@@ -21,7 +21,11 @@ from zoneinfo import ZoneInfo
 
 from backtest_engine import BacktestResult, Trade
 from data_manager import get_historical
-from light_strategy_config import LightNiftyRSIConfig
+from light_strategy_config import (
+    LightNiftyRSIConfig,
+    is_light_l1_trade_permission,
+    param_apply_on,
+)
 from logger import get_logger
 
 log = get_logger("light_l1_backtest")
@@ -69,6 +73,15 @@ def _ensure_ist(ts: Any) -> datetime:
 def _in_entry_window(cfg: LightNiftyRSIConfig, now: datetime) -> bool:
     sh, sm = _parse_hhmm(cfg.entry_window_start)
     eh, em = _parse_hhmm(cfg.entry_window_end)
+    t = now.time()
+    start = now.replace(hour=sh, minute=sm, second=0, microsecond=0).time()
+    end = now.replace(hour=eh, minute=em, second=0, microsecond=0).time()
+    return start <= t <= end
+
+
+def _in_exit_window(cfg: LightNiftyRSIConfig, now: datetime) -> bool:
+    sh, sm = _parse_hhmm(cfg.exit_window_start)
+    eh, em = _parse_hhmm(cfg.exit_window_end)
     t = now.time()
     start = now.replace(hour=sh, minute=sm, second=0, microsecond=0).time()
     end = now.replace(hour=eh, minute=em, second=0, microsecond=0).time()
@@ -140,12 +153,12 @@ LIGHT_L1_PRESETS: dict[str, LightNiftyRSIConfig] = {
     "Premium-focused (₹20–30)": LightNiftyRSIConfig(
         min_premium=20.0,
         max_premium=30.0,
-        otm_distance_min=80.0,
-        otm_distance_max=200.0,
+        otm_points_min=80.0,
+        otm_points_max=200.0,
     ),
     "Distance-focused (300–500 pt OTM)": LightNiftyRSIConfig(
-        otm_distance_min=300.0,
-        otm_distance_max=500.0,
+        otm_points_min=300.0,
+        otm_points_max=500.0,
         min_premium=15.0,
         max_premium=45.0,
     ),
@@ -198,8 +211,12 @@ def run_light_l1_backtest(
     eq_series: list[float] = []
     eq_times: list[pd.Timestamp] = []
 
-    period = max(2, int(cfg.rsi_period))
-    entry_premium_hint = (cfg.min_premium + cfg.max_premium) / 2.0
+    period = max(2, int(cfg.rsi_period if param_apply_on(cfg, "rsi_period") else 14))
+    eff_pmin = cfg.min_premium if param_apply_on(cfg, "min_premium") else 0.0
+    eff_pmax = cfg.max_premium if param_apply_on(cfg, "max_premium") else 200.0
+    entry_premium_hint = (eff_pmin + eff_pmax) / 2.0
+    max_day = cfg.max_trades_per_day if param_apply_on(cfg, "max_trades_per_day") else 999
+    can_buy = is_light_l1_trade_permission()
 
     for _, row in raw.iterrows():
         ts = row["datetime"]
@@ -243,24 +260,26 @@ def run_light_l1_backtest(
 
             exit_reason: str | None = None
 
-            if cfg.use_exit_eod and _eod_exit_due(cfg, now):
+            in_exit_win = (not cfg.use_exit_window) or _in_exit_window(cfg, now)
+
+            if cfg.use_exit_eod and param_apply_on(cfg, "eod_squareoff_time") and _eod_exit_due(cfg, now):
                 exit_reason = "EOD square-off"
-            elif cfg.use_exit_time_stop:
+            elif in_exit_win and cfg.use_exit_time_stop and param_apply_on(cfg, "time_stop_min"):
                 elapsed_min = (now - leg["entry_time"]).total_seconds() / 60.0
                 if elapsed_min >= cfg.time_stop_min:
                     exit_reason = f"Time stop ({cfg.time_stop_min} min)"
-            if exit_reason is None and cfg.use_exit_profit_target:
+            if exit_reason is None and in_exit_win and cfg.use_exit_profit_target and param_apply_on(cfg, "profit_target_pct"):
                 tp = entry * (1.0 + cfg.profit_target_pct / 100.0)
                 if ltp >= tp:
                     exit_reason = f"Profit target +{cfg.profit_target_pct}%"
-            if exit_reason is None and cfg.use_exit_stop_loss:
+            if exit_reason is None and cfg.use_exit_stop_loss and param_apply_on(cfg, "stop_loss_pct"):
                 sl = entry * (1.0 - cfg.stop_loss_pct / 100.0)
                 if ltp <= sl:
                     exit_reason = f"Stop loss -{cfg.stop_loss_pct}%"
-            if exit_reason is None and cfg.use_exit_rsi:
-                if opt_type == "CE" and rsi > cfg.rsi_exit_ce_above:
+            if exit_reason is None and in_exit_win and cfg.use_exit_rsi:
+                if opt_type == "CE" and param_apply_on(cfg, "rsi_exit_ce_above") and rsi > cfg.rsi_exit_ce_above:
                     exit_reason = f"RSI exit CE (RSI={rsi} > {cfg.rsi_exit_ce_above})"
-                elif opt_type == "PE" and rsi < cfg.rsi_exit_pe_below:
+                elif opt_type == "PE" and param_apply_on(cfg, "rsi_exit_pe_below") and rsi < cfg.rsi_exit_pe_below:
                     exit_reason = f"RSI exit PE (RSI={rsi} < {cfg.rsi_exit_pe_below})"
 
             if exit_reason:
@@ -268,7 +287,8 @@ def run_light_l1_backtest(
                 pnl = (ltp - entry) * qty
                 if pnl < 0:
                     day_st.consecutive_losses += 1
-                    if day_st.consecutive_losses >= cfg.max_consecutive_losses:
+                    lim = cfg.max_consecutive_losses if param_apply_on(cfg, "max_consecutive_losses") else 999
+                    if day_st.consecutive_losses >= lim:
                         day_st.halted = True
                 else:
                     day_st.consecutive_losses = 0
@@ -295,23 +315,28 @@ def run_light_l1_backtest(
             and not day_st.halted
             and not skip_new_entry
         ):
-            if day_st.trades_today < cfg.max_trades_per_day and (
-                not cfg.use_entry_window or _in_entry_window(cfg, now)
+            if (
+                can_buy
+                and day_st.trades_today < max_day
+                and (not cfg.use_entry_window or _in_entry_window(cfg, now))
             ):
                 prev = prev_rsi
                 ce_cross = (
                     prev is not None
+                    and param_apply_on(cfg, "rsi_buy_ce_below")
                     and prev >= cfg.rsi_buy_ce_below
                     and rsi < cfg.rsi_buy_ce_below
                 )
                 pe_cross = (
                     prev is not None
+                    and param_apply_on(cfg, "rsi_buy_pe_above")
                     and prev <= cfg.rsi_buy_pe_above
                     and rsi > cfg.rsi_buy_pe_above
                 )
 
                 if ce_cross and not pe_cross:
-                    qty = int(cfg.lot_size) * index_lot_units
+                    lots = int(cfg.lot_size) if param_apply_on(cfg, "lot_size") else 1
+                    qty = lots * index_lot_units
                     ep = entry_premium_hint
                     open_leg = {
                         "opt_type": "CE",
@@ -323,7 +348,8 @@ def run_light_l1_backtest(
                     }
                     day_st.trades_today += 1
                 elif pe_cross and not ce_cross:
-                    qty = int(cfg.lot_size) * index_lot_units
+                    lots = int(cfg.lot_size) if param_apply_on(cfg, "lot_size") else 1
+                    qty = lots * index_lot_units
                     ep = entry_premium_hint
                     open_leg = {
                         "opt_type": "PE",

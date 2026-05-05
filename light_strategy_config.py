@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import json
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from typing import Any
 
 from app_settings import get_bool, get_setting, set_bool, set_setting
@@ -22,10 +22,31 @@ log = get_logger("light_strategy_config")
 
 _CONFIG_KEY = "light_l1_config"
 _TOGGLE_KEY = "light_l1_enabled"
+_TRADE_PERM_KEY = "light_l1_trade_permission"
 _DAY_STATE_KEY = "light_l1_day_state"
 # Named config snapshots (user profiles) — JSON object: { "MyAggro": { ... asdict ... }, ... }
 _PROFILES_KEY = "light_l1_profiles"
 _MAX_NAMED_PROFILES = 20
+
+# Keys for `LightNiftyRSIConfig.param_apply` — False = ignore saved value for that rule (built-in neutral).
+PARAM_APPLY_KEYS: tuple[str, ...] = (
+    "rsi_period",
+    "rsi_buy_ce_below",
+    "rsi_buy_pe_above",
+    "rsi_exit_ce_above",
+    "rsi_exit_pe_below",
+    "min_premium",
+    "max_premium",
+    "otm_points_min",
+    "otm_points_max",
+    "profit_target_pct",
+    "stop_loss_pct",
+    "time_stop_min",
+    "eod_squareoff_time",
+    "max_trades_per_day",
+    "max_consecutive_losses",
+    "lot_size",
+)
 
 _CACHE_TTL_SEC = 30.0
 _cached_cfg: dict[str, Any] | None = None
@@ -41,8 +62,9 @@ class LightNiftyRSIConfig:
     rsi_exit_pe_below: float = 65.0
     min_premium: float = 30.0
     max_premium: float = 50.0
-    otm_distance_min: float = 100.0
-    otm_distance_max: float = 250.0
+    # OTM in **index points** along the OTM side (same units as `_otm_distance` in `light_nifty_rsi`).
+    otm_points_min: float = 100.0
+    otm_points_max: float = 250.0
     profit_target_pct: float = 50.0
     stop_loss_pct: float = 30.0
     time_stop_min: int = 90
@@ -51,10 +73,13 @@ class LightNiftyRSIConfig:
     max_consecutive_losses: int = 2
     entry_window_start: str = "09:30"
     entry_window_end: str = "14:30"
+    exit_window_start: str = "09:30"
+    exit_window_end: str = "15:25"
     lot_size: int = 1
     mode: str = "PAPER"
     # Rule groups — when False, that filter/exit is skipped (defaults = current behaviour).
     use_entry_window: bool = True
+    use_exit_window: bool = True
     use_otm_distance_filter: bool = True
     use_premium_band: bool = True
     use_exit_eod: bool = True
@@ -62,6 +87,7 @@ class LightNiftyRSIConfig:
     use_exit_profit_target: bool = True
     use_exit_stop_loss: bool = True
     use_exit_rsi: bool = True
+    param_apply: dict[str, bool] = field(default_factory=dict)
 
     def to_json(self) -> str:
         return json.dumps(asdict(self), ensure_ascii=False)
@@ -72,6 +98,10 @@ class LightNiftyRSIConfig:
         for k in base:
             if k in d:
                 base[k] = d[k]
+        # Legacy: older JSON used `otm_distance_*` for index points before `otm_points_*` existed.
+        if "otm_points_min" not in d:
+            base["otm_points_min"] = float(d.get("otm_distance_min", base["otm_points_min"]))
+            base["otm_points_max"] = float(d.get("otm_distance_max", base["otm_points_max"]))
         # Coerce types
         base["rsi_period"] = int(base["rsi_period"])
         base["time_stop_min"] = int(base["time_stop_min"])
@@ -85,8 +115,8 @@ class LightNiftyRSIConfig:
             "rsi_exit_pe_below",
             "min_premium",
             "max_premium",
-            "otm_distance_min",
-            "otm_distance_max",
+            "otm_points_min",
+            "otm_points_max",
             "profit_target_pct",
             "stop_loss_pct",
         ):
@@ -96,6 +126,7 @@ class LightNiftyRSIConfig:
             base["mode"] = "PAPER"
         for b in (
             "use_entry_window",
+            "use_exit_window",
             "use_otm_distance_filter",
             "use_premium_band",
             "use_exit_eod",
@@ -113,6 +144,7 @@ class LightNiftyRSIConfig:
                 base[b] = v.strip().lower() in ("1", "true", "yes", "on")
             else:
                 base[b] = bool(v)
+        base["param_apply"] = normalize_param_apply(base.get("param_apply"))
         return cls(**base)
 
 
@@ -120,12 +152,44 @@ def default_config() -> LightNiftyRSIConfig:
     return LightNiftyRSIConfig()
 
 
+def _coerce_bool(v: Any, default: bool = True) -> bool:
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, (int, float)) and not isinstance(v, bool):
+        return bool(v)
+    if isinstance(v, str):
+        return v.strip().lower() in ("1", "true", "yes", "on")
+    return default
+
+
+def normalize_param_apply(raw: Any) -> dict[str, bool]:
+    out = {k: True for k in PARAM_APPLY_KEYS}
+    if isinstance(raw, dict):
+        for k in PARAM_APPLY_KEYS:
+            if k in raw:
+                out[k] = _coerce_bool(raw.get(k), True)
+    return out
+
+
+def param_apply_on(cfg: LightNiftyRSIConfig, key: str) -> bool:
+    """If False, strategy/backtest ignores the saved numeric/time for that key (neutral behaviour)."""
+    d = getattr(cfg, "param_apply", None) or {}
+    if not isinstance(d, dict):
+        return True
+    return bool(d.get(key, True))
+
+
 def ensure_light_l1_schema(cfg: LightNiftyRSIConfig) -> LightNiftyRSIConfig:
     """
     Merge saved config onto current defaults so new fields (e.g. use_*) always exist.
     Use after loading older DB JSON or if the process briefly ran an older class definition.
     """
-    merged = {**asdict(default_config()), **asdict(cfg)}
+    ddef = asdict(default_config())
+    dcfg = asdict(cfg)
+    merged = {**ddef, **dcfg}
+    merged["param_apply"] = normalize_param_apply(
+        {**(ddef.get("param_apply") or {}), **(dcfg.get("param_apply") or {})}
+    )
     return LightNiftyRSIConfig.from_dict(merged)
 
 
@@ -178,6 +242,15 @@ def is_light_l1_enabled() -> bool:
 
 def set_light_l1_enabled(on: bool) -> None:
     set_bool(_TOGGLE_KEY, on)
+
+
+def is_light_l1_trade_permission() -> bool:
+    """When False, Light L1 will not open new option BUY legs (EXIT still allowed if already in a leg)."""
+    return get_bool(_TRADE_PERM_KEY, True)
+
+
+def set_light_l1_trade_permission(on: bool) -> None:
+    set_bool(_TRADE_PERM_KEY, on)
 
 
 @dataclass

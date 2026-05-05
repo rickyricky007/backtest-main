@@ -2,7 +2,7 @@
 Light Strategy L1 — NIFTY RSI options (CE/PE), configurable via DB + dashboard.
 ===============================================================================
 Subscribes to **NIFTY 50** index ticks; builds 5-minute candles; RSI entries;
-selects weekly NIFTY options by OTM distance + premium band. Manages exits via
+selects weekly NIFTY options by OTM index points + premium band. Manages exits via
 live quotes (index ticks alone do not carry option prices — SL manager is not
 used for open option legs).
 """
@@ -20,10 +20,12 @@ import kite_data as kd
 from logger import get_logger
 from light_strategy_config import (
     LightNiftyRSIConfig,
+    is_light_l1_enabled,
+    is_light_l1_trade_permission,
     load_config,
     load_day_state,
+    param_apply_on,
     save_day_state,
-    is_light_l1_enabled,
 )
 from strategies.base_strategy import BaseStrategy, Signal
 
@@ -100,12 +102,14 @@ def _pick_option_contract(
     nearest = future_exp[0]
 
     strike_rows = [r for r in rows if _expiry_as_date(r["expiry"]) == nearest]
+    eff_pt_min = cfg.otm_points_min if param_apply_on(cfg, "otm_points_min") else 0.0
+    eff_pt_max = cfg.otm_points_max if param_apply_on(cfg, "otm_points_max") else 1e9
     if cfg.use_otm_distance_filter:
         candidates: list[dict[str, Any]] = []
         for r in strike_rows:
             strike = float(r["strike"])
-            dist = _otm_distance(opt_type, strike, spot)
-            if cfg.otm_distance_min <= dist <= cfg.otm_distance_max:
+            pts = _otm_distance(opt_type, strike, spot)
+            if eff_pt_min <= pts <= eff_pt_max:
                 candidates.append(r)
     else:
         candidates = list(strike_rows)
@@ -145,7 +149,9 @@ def _pick_option_contract(
             continue
         ltp = float(ltp)
         if cfg.use_premium_band:
-            if not (cfg.min_premium <= ltp <= cfg.max_premium):
+            eff_pmin = cfg.min_premium if param_apply_on(cfg, "min_premium") else 0.0
+            eff_pmax = cfg.max_premium if param_apply_on(cfg, "max_premium") else 1e9
+            if not (eff_pmin <= ltp <= eff_pmax):
                 continue
         lot = int(r.get("lot_size") or 50)
         return (sym, ltp, lot)
@@ -212,6 +218,14 @@ class LightNiftyRSIStrategy(BaseStrategy):
         end = datetime.now(IST).replace(hour=eh, minute=em, second=0, microsecond=0).time()
         return start <= t <= end
 
+    def _in_exit_window(self, cfg: LightNiftyRSIConfig, now: datetime) -> bool:
+        sh, sm = _parse_hhmm(cfg.exit_window_start)
+        eh, em = _parse_hhmm(cfg.exit_window_end)
+        t = now.time()
+        start = datetime.now(IST).replace(hour=sh, minute=sm, second=0, microsecond=0).time()
+        end = datetime.now(IST).replace(hour=eh, minute=em, second=0, microsecond=0).time()
+        return start <= t <= end
+
     def _eod_exit_due(self, cfg: LightNiftyRSIConfig, now: datetime) -> bool:
         eh, em = _parse_hhmm(cfg.eod_squareoff_time)
         cutoff = now.replace(hour=eh, minute=em, second=0, microsecond=0)
@@ -266,33 +280,35 @@ class LightNiftyRSIStrategy(BaseStrategy):
         entry = float(leg["entry_price"])
         opt_type = leg["opt_type"]
 
-        if cfg.use_exit_eod and self._eod_exit_due(cfg, now):
+        if cfg.use_exit_eod and param_apply_on(cfg, "eod_squareoff_time") and self._eod_exit_due(cfg, now):
             self._open_leg = None
             return self._exit_signal(leg, ltp, "EOD square-off", cfg)
 
-        if cfg.use_exit_time_stop:
+        in_exit_win = (not cfg.use_exit_window) or self._in_exit_window(cfg, now)
+
+        if in_exit_win and cfg.use_exit_time_stop and param_apply_on(cfg, "time_stop_min"):
             elapsed_min = (now - leg["entry_time"]).total_seconds() / 60.0
             if elapsed_min >= cfg.time_stop_min:
                 self._open_leg = None
                 return self._exit_signal(leg, ltp, f"Time stop ({cfg.time_stop_min} min)", cfg)
 
-        if cfg.use_exit_profit_target:
+        if in_exit_win and cfg.use_exit_profit_target and param_apply_on(cfg, "profit_target_pct"):
             tp = entry * (1.0 + cfg.profit_target_pct / 100.0)
             if ltp >= tp:
                 self._open_leg = None
                 return self._exit_signal(leg, ltp, f"Profit target +{cfg.profit_target_pct}%", cfg)
 
-        if cfg.use_exit_stop_loss:
+        if cfg.use_exit_stop_loss and param_apply_on(cfg, "stop_loss_pct"):
             sl = entry * (1.0 - cfg.stop_loss_pct / 100.0)
             if ltp <= sl:
                 self._open_leg = None
                 return self._exit_signal(leg, ltp, f"Stop loss -{cfg.stop_loss_pct}%", cfg)
 
-        if cfg.use_exit_rsi:
-            if opt_type == "CE" and rsi > cfg.rsi_exit_ce_above:
+        if in_exit_win and cfg.use_exit_rsi:
+            if opt_type == "CE" and param_apply_on(cfg, "rsi_exit_ce_above") and rsi > cfg.rsi_exit_ce_above:
                 self._open_leg = None
                 return self._exit_signal(leg, ltp, f"RSI exit CE (RSI={rsi} > {cfg.rsi_exit_ce_above})", cfg)
-            if opt_type == "PE" and rsi < cfg.rsi_exit_pe_below:
+            if opt_type == "PE" and param_apply_on(cfg, "rsi_exit_pe_below") and rsi < cfg.rsi_exit_pe_below:
                 self._open_leg = None
                 return self._exit_signal(leg, ltp, f"RSI exit PE (RSI={rsi} < {cfg.rsi_exit_pe_below})", cfg)
 
@@ -305,7 +321,8 @@ class LightNiftyRSIStrategy(BaseStrategy):
         st = load_day_state(today)
         if win < 0:
             st.consecutive_losses += 1
-            if st.consecutive_losses >= cfg.max_consecutive_losses:
+            lim = cfg.max_consecutive_losses if param_apply_on(cfg, "max_consecutive_losses") else 999
+            if st.consecutive_losses >= lim:
                 st.halted = True
         else:
             st.consecutive_losses = 0
@@ -347,7 +364,7 @@ class LightNiftyRSIStrategy(BaseStrategy):
 
         self._feed_five_min_close(price, now)
 
-        period = max(2, int(cfg.rsi_period))
+        period = max(2, int(cfg.rsi_period if param_apply_on(cfg, "rsi_period") else 14))
         if len(self._rsi_closes) < period + 1:
             return None
 
@@ -367,7 +384,12 @@ class LightNiftyRSIStrategy(BaseStrategy):
         if self._open_leg:
             return None
 
-        if day_state.trades_today >= cfg.max_trades_per_day:
+        if not is_light_l1_trade_permission():
+            self._prev_rsi = rsi
+            return None
+
+        max_day = cfg.max_trades_per_day if param_apply_on(cfg, "max_trades_per_day") else 999
+        if day_state.trades_today >= max_day:
             self._prev_rsi = rsi
             return None
 
@@ -390,14 +412,23 @@ class LightNiftyRSIStrategy(BaseStrategy):
 
         signal: Signal | None = None
 
-        ce_cross = prev >= cfg.rsi_buy_ce_below and rsi < cfg.rsi_buy_ce_below
-        pe_cross = prev <= cfg.rsi_buy_pe_above and rsi > cfg.rsi_buy_pe_above
+        ce_cross = (
+            param_apply_on(cfg, "rsi_buy_ce_below")
+            and prev >= cfg.rsi_buy_ce_below
+            and rsi < cfg.rsi_buy_ce_below
+        )
+        pe_cross = (
+            param_apply_on(cfg, "rsi_buy_pe_above")
+            and prev <= cfg.rsi_buy_pe_above
+            and rsi > cfg.rsi_buy_pe_above
+        )
 
         if ce_cross and not pe_cross:
             picked = _pick_option_contract(kite, cfg, "CE", price)
             if picked:
                 sym, ltp, lot_unit = picked
-                qty = int(cfg.lot_size) * lot_unit
+                lots = int(cfg.lot_size) if param_apply_on(cfg, "lot_size") else 1
+                qty = lots * lot_unit
                 self._open_leg = {
                     "symbol": sym,
                     "opt_type": "CE",
@@ -429,7 +460,8 @@ class LightNiftyRSIStrategy(BaseStrategy):
             picked = _pick_option_contract(kite, cfg, "PE", price)
             if picked:
                 sym, ltp, lot_unit = picked
-                qty = int(cfg.lot_size) * lot_unit
+                lots = int(cfg.lot_size) if param_apply_on(cfg, "lot_size") else 1
+                qty = lots * lot_unit
                 self._open_leg = {
                     "symbol": sym,
                     "opt_type": "PE",

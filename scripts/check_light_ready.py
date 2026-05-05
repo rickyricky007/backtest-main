@@ -46,7 +46,11 @@ def main() -> int:
         print("[INFO] No .breeze_session — data falls back to Kite/yfinance where applicable")
 
     try:
-        from light_strategy_config import is_light_l1_enabled, load_config
+        from light_strategy_config import (
+            is_light_l1_enabled,
+            is_light_l1_trade_permission,
+            load_config,
+        )
 
         cfg = load_config(force=True)
         print(
@@ -54,6 +58,10 @@ def main() -> int:
             f"max_trades/day={cfg.max_trades_per_day}, lots={cfg.lot_size}"
         )
         print(f"[INFO] Light L1 engine toggle (app_settings): {'ON' if is_light_l1_enabled() else 'OFF'}")
+        print(
+            f"[INFO] Light L1 trade permission (new BUY): "
+            f"{'ON' if is_light_l1_trade_permission() else 'OFF'}"
+        )
     except Exception as e:
         print(f"[FAIL] light_l1_config: {e}")
         ok = False

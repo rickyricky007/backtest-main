@@ -41,24 +41,35 @@ Use so logs stay searchable:
 
 ## Current session (latest)
 
-**Last updated:** 2026-05-02 · **~22:02 IST** (Indian Standard Time, Asia/Kolkata)  
+**Last updated:** 2026-05-05 (IST) — journal below covers 2026-05-04 and 2026-05-05  
 **Agent / tool:** `cursor-composer`
 
-**Done this session** *(agent: **`cursor-composer`**)*
-- **Light L1 rule-group toggles:** Eight `use_*` booleans on **`LightNiftyRSIConfig`** — entry window, OTM filter, premium band; exits EOD / time / TP / SL / RSI. Form section **Rule toggles** on Light Trades; save requires ≥1 exit rule. **`light_nifty_rsi`** + **`light_l1_backtest`** honour the same flags (backtest caption: OTM/premium affect live pick only).
-- **Resilience fixes:** Added SQLite `engine_orders` migration in **`db.py`** (legacy `created_at` schemas upgraded to include `timestamp` + fill/slippage columns); replaced non-archive Streamlit `use_container_width` with `width` API.
-- **Runtime setup:** Installed **`psycopg2-binary`** in active runtime; DB now initializes as **PostgreSQL primary** when `DATABASE_URL` is set.
-- **Local startup UX:** Added one-command **`deploy/local_startup.sh`** and **`make local-start`** — opens login URL, accepts request token, exchanges token, then starts **`process_guard.py`**.
-- **Ops hardening:** `process_guard.py` now auto-picks a free Streamlit port (or uses `STREAMLIT_PORT`) to avoid dashboard crash loops when 8501 is busy.
-- **Safety guardrails:** `deploy/local_startup.sh` now enforces `venv/bin/python` by default with explicit checks and clearer failure messages.
-- **Light Trades — mission control:** **LIVE** error banner, 6-tile row (mode, engine, trades, halted, consecutive losses, last order time + detail), caps caption, CLI hint.
-- **Named profiles:** **`light_l1_profiles`** in **`app_settings`** (max 20) — `load/save/delete` in **`light_strategy_config.py`**, expander on Light Trades to apply/save/delete.
-- **Readiness:** **`scripts/check_light_ready.py`**, **`Makefile`** targets **`status` / `light-status`** (run from **`ricky_1/`**).
-- **`light_fill_quality.light_l1_last_order()`** for last-row mission control.
-- **`AGENTS.md`** — document **`light_l1_profiles`**.
+### Done — **2026-05-04** (`cursor-composer`)
+
+- **Light Trades UI simplification:** Removed the **Rule toggles** block (group checkboxes + backtest caption). Control is via **Apply each parameter value (per field)** only; **`param_apply`** + **`light_nifty_rsi`** / **`light_l1_backtest`** unchanged in spirit.
+- **OTM — index points:** Separate **min / max** fields and Apply rows (**OTM — index points from spot**); labels clarified (CE/PE vs spot).
+- **Restore defaults:** Single **Restore defaults** beside **Parameters** (outside form so it runs immediately + rerun).
+- **Save behaviour:** Form **Save** keeps existing **`use_*`** rule-group flags from loaded **`cfg`** (no accidental flip when group toggles were removed) — change **`use_*`** via **Restore defaults**, named profiles, or code.
+- **`L1_PARAM_APPLY_KEYS`:** Local tuple on **`4_Light_Strategies.py`** (must stay aligned with **`PARAM_APPLY_KEYS`** in **`light_strategy_config.py`**) to avoid stale **`ImportError`** on **`PARAM_APPLY_KEYS`** import.
+
+### Done — **2026-05-05** (`cursor-composer`)
+
+- **OTM strike steps (reverted):** Implemented **`otm_distance_*` as strike steps from ATM** + **`otm_points_*`**, then **removed** strike-step fields and logic per request; kept **`otm_points_min/max`** only. Legacy JSON: **`otm_distance_*` points-only** still migrates to **`otm_points_*`** in **`LightNiftyRSIConfig.from_dict`**.
+- **Entry / exit time windows:** Config + UI: **`use_entry_window`**, **`use_exit_window`**, **`exit_window_start`**, **`exit_window_end`**. **Both toggles off** ⇒ no IST clock band on **new entries** or on **TP / time stop / RSI** exits; **`light_nifty_rsi`** + **`light_l1_backtest`**: **EOD** + **stop loss** still evaluated when enabled (not gated by exit window).
+- **Apply section — bulk toggles:** **Apply** expander placed **above** the main form (**Streamlit** forbids **`st.button` inside `st.form`**). Each heading (**RSI**, **OTM**, **Premium**, **Exit / time**, **Risk / size**) has **All on** / **All off** for that section’s **`param_apply`** keys; **Save configuration** still required to persist.
+- **Docs / handoff:** **`AGENTS.md`** updated for **`light_l1_config`** (time windows, OTM, profiles); **`SESSION.md`** / **`CLAUDE.md`** sync clarified — regenerate **`CLAUDE.md`** with **`python update_docs.py`** after **`SESSION.md`** edits.
+
+### Same workstream (recent; includes pre–05-04)
+
+- **Trade permission:** **`light_l1_trade_permission`** — OFF blocks **new** CE/PE **BUY**; **EXIT** for open leg still runs; UI toggle + **`check_light_ready`** + **`AGENTS.md`**.
+- **`param_apply`:** Full wiring on **`LightNiftyRSIConfig`**; strategy + sim honour masks.
+- **Mission control row** on Light Trades; **`light_l1_last_order()`**; caps caption with entry/exit window ON/OFF.
+- **Named profiles:** **`light_l1_profiles`** (max 20), **`light_strategy_config`** load/save/delete, UI expander.
+- **Infra / ops:** SQLite **`engine_orders`** migration in **`db.py`**; Streamlit **`width`** vs deprecated container width; **`psycopg2-binary`** / Postgres when **`DATABASE_URL`** set; **`deploy/local_startup.sh`**, **`make local-start`**; **`process_guard`** free Streamlit port; **`Makefile`** **`status`** / **`light-status`**.
+- **Phase 2 / analytics:** **`order_manager._log`**, fills/slippage; **`option_quote_iv`**; fills vs assumptions; **`mid_premium_assumption`** on signals.
 
 **Earlier in same workstream**
-- **Phase 2 tracking:** **`order_manager._log`** + fill columns; **`kite_data.option_quote_iv`**; **Fills vs assumptions** table; **`mid_premium_assumption`** on signals; **Product priorities** block in this file.
+- **Product priorities** block (this file); **`ROADMAP2`** Phase 2 tracking.
 
 **ROADMAP2 Phase 2 — still open** (see `ROADMAP2.md`; operator may treat some items as optional — see **Product priorities** above)
 - [ ] **Option chain history** — replay real premia *(optional; sim backtest remains in `light_l1_backtest.py`)*.
@@ -71,18 +82,22 @@ Use so logs stay searchable:
 **Blockers**
 - None.
 
-**Files touched** (this batch)
+**Files touched** (2026-05-04 / 05-05 Light L1 + docs)
 - `ricky_1/light_strategy_config.py`
 - `ricky_1/strategies/light_nifty_rsi.py`
 - `ricky_1/light_l1_backtest.py`
 - `ricky_1/pages/3_Signals/4_Light_Strategies.py`
+- `ricky_1/AGENTS.md`
+- `ricky_1/SESSION.md`
+- `ricky_1/CLAUDE.md` (regenerate: `cd ricky_1 && python update_docs.py`)
+
+**Files touched** (same sprint — infra / readiness)
+- `ricky_1/scripts/check_light_ready.py`
 - `ricky_1/process_guard.py`
 - `ricky_1/deploy/local_startup.sh`
 - `ricky_1/db.py`
 - `ricky_1/Makefile`
-- `ricky_1/AGENTS.md`
-- `ricky_1/SESSION.md`
-- `ricky_1/CLAUDE.md` (via `update_docs.py` after this edit)
+- `ricky_1/light_fill_quality.py` (`light_l1_last_order`)
 
 ---
 

@@ -26,15 +26,67 @@ from light_strategy_config import (
     default_config,
     delete_named_profile,
     is_light_l1_enabled,
+    is_light_l1_trade_permission,
     list_named_profile_names,
     load_config,
     load_named_profiles,
     load_day_state,
+    param_apply_on,
     save_config,
     save_day_state,
     save_named_profile,
     set_light_l1_enabled,
+    set_light_l1_trade_permission,
 )
+
+
+# Must match `PARAM_APPLY_KEYS` in `light_strategy_config.py` (used for `param_apply` JSON keys).
+L1_PARAM_APPLY_KEYS: tuple[str, ...] = (
+    "rsi_period",
+    "rsi_buy_ce_below",
+    "rsi_buy_pe_above",
+    "rsi_exit_ce_above",
+    "rsi_exit_pe_below",
+    "min_premium",
+    "max_premium",
+    "otm_points_min",
+    "otm_points_max",
+    "profit_target_pct",
+    "stop_loss_pct",
+    "time_stop_min",
+    "eod_squareoff_time",
+    "max_trades_per_day",
+    "max_consecutive_losses",
+    "lot_size",
+)
+
+PARAM_APPLY_LABELS: dict[str, str] = {
+    "rsi_period": "RSI period",
+    "rsi_buy_ce_below": "RSI buy CE below",
+    "rsi_buy_pe_above": "RSI buy PE above",
+    "rsi_exit_ce_above": "RSI exit CE above",
+    "rsi_exit_pe_below": "RSI exit PE below",
+    "min_premium": "Min premium ₹",
+    "max_premium": "Max premium ₹",
+    "otm_points_min": "OTM · min index points (from spot, OTM side)",
+    "otm_points_max": "OTM · max index points (from spot, OTM side)",
+    "profit_target_pct": "Profit target %",
+    "stop_loss_pct": "Stop loss %",
+    "time_stop_min": "Time stop (min)",
+    "eod_squareoff_time": "EOD time (HH:MM)",
+    "max_trades_per_day": "Max trades/day",
+    "max_consecutive_losses": "Max consec. losses",
+    "lot_size": "Lots / trade",
+}
+
+# Order inside “Apply each parameter” expander (section title, keys).
+_APPLY_SECTIONS: list[tuple[str, tuple[str, ...]]] = [
+    ("RSI", ("rsi_period", "rsi_buy_ce_below", "rsi_buy_pe_above", "rsi_exit_ce_above", "rsi_exit_pe_below")),
+    ("OTM — index points (from spot)", ("otm_points_min", "otm_points_max")),
+    ("Premium (₹)", ("min_premium", "max_premium")),
+    ("Exit / time", ("profit_target_pct", "stop_loss_pct", "time_stop_min", "eod_squareoff_time")),
+    ("Risk / size", ("max_trades_per_day", "max_consecutive_losses", "lot_size")),
+]
 
 
 def _profit_factor_label(v: float) -> str:
@@ -116,9 +168,17 @@ mc6.metric("Last order (time)", last_ts)
 if last_detail:
     st.caption(f"Last order detail: {last_detail}")
 
+ew_note = (
+    f"entry window **{cfg.entry_window_start}**–**{cfg.entry_window_end}**"
+    + (" · ON" if cfg.use_entry_window else " · OFF")
+)
+xw_note = (
+    f"exit window **{cfg.exit_window_start}**–**{cfg.exit_window_end}**"
+    + (" · ON" if cfg.use_exit_window else " · OFF")
+)
 st.caption(
     f"**Caps (saved config):** ≤ **{cfg.max_trades_per_day}** trades/day · **{cfg.lot_size}** lot(s) · "
-    f"entry window **{cfg.entry_window_start}**–**{cfg.entry_window_end}** · "
+    f"{ew_note} · {xw_note} · "
     f"consecutive-loss halt after **{cfg.max_consecutive_losses}**"
 )
 st.caption("CLI check: `make status` or `python scripts/check_light_ready.py` from **`ricky_1/`**")
@@ -133,7 +193,17 @@ if on != is_light_l1_enabled():
     set_light_l1_enabled(on)
     st.rerun()
 
-cfg = load_config(force=True)
+trade_ok = st.toggle(
+    "Trade permission (new BUY entries)",
+    value=is_light_l1_trade_permission(),
+    help="When OFF, Light L1 will not open new CE/PE positions. **EXIT** for an already-open leg still runs. "
+    "Applies in both PAPER and LIVE (mode is unchanged).",
+)
+if trade_ok != is_light_l1_trade_permission():
+    set_light_l1_trade_permission(trade_ok)
+    st.rerun()
+
+st.caption(f"**Trade permission (new BUY):** {'ON' if is_light_l1_trade_permission() else 'OFF'}")
 
 if st.button("Reset daily halt / counters (today only)", help="Clears halted flag and counters for the current session date"):
     save_day_state(LightL1DayState(day=today, trades_today=0, consecutive_losses=0, halted=False))
@@ -142,41 +212,69 @@ if st.button("Reset daily halt / counters (today only)", help="Clears halted fla
 
 st.divider()
 
-st.subheader("Parameters")
+ph1, ph2 = st.columns([3, 1])
+with ph1:
+    st.subheader("Parameters")
+with ph2:
+    st.markdown("")  # align button vertically with heading
+    st.markdown("")
+    if st.button("Restore defaults", help="Reset Light L1 numbers + per-field Apply switches to factory defaults"):
+        save_config(default_config())
+        st.success("Defaults restored.")
+        st.rerun()
 
-if st.button("Restore default parameters"):
-    save_config(default_config())
-    st.success("Defaults restored.")
-    st.rerun()
+# Outside `st.form`: Streamlit disallows `st.button` inside forms — bulk Apply toggles must live here.
+with st.expander("Apply each parameter value (per field)", expanded=True):
+    st.caption(
+        "**On** = the saved number/time below is used for that rule. **Off** = that field is ignored and a built‑in neutral value is used instead. "
+        "**All on / All off** sets every checkbox in that section only (still **Save configuration** to persist). "
+        "**OTM points** = index distance on the OTM side vs spot (CE: strike − spot; PE: spot − strike)."
+    )
+    for sec_i, (sec_title, keys) in enumerate(_APPLY_SECTIONS):
+        hd, b_on, b_off = st.columns([4.2, 1, 1])
+        with hd:
+            st.markdown(f"**{sec_title}**")
+        with b_on:
+            if st.button("All on", key=f"l1_pa_sec_all_on_{sec_i}", help=f"Enable Apply for all “{sec_title}” fields"):
+                for k in keys:
+                    st.session_state[f"l1_pa_{k}"] = True
+                st.rerun()
+        with b_off:
+            if st.button("All off", key=f"l1_pa_sec_all_off_{sec_i}", help=f"Disable Apply for all “{sec_title}” fields"):
+                for k in keys:
+                    st.session_state[f"l1_pa_{k}"] = False
+                st.rerun()
+        for key in keys:
+            st.checkbox(
+                PARAM_APPLY_LABELS.get(key, key),
+                value=param_apply_on(cfg, key),
+                key=f"l1_pa_{key}",
+            )
+        st.markdown("")
 
 with st.form("light_l1_form"):
-    st.markdown("**Rule toggles** — enable whole rule *groups* (cleaner than one switch per number). When off, that filter or exit type is skipped; numeric fields are still stored.")
-    rt1, rt2 = st.columns(2)
-    with rt1:
-        use_entry_window = st.checkbox(
-            "Entry time window",
-            value=bool(getattr(cfg, "use_entry_window", True)),
-            help="Off = allow new entries any time of session (still subject to max trades/day).",
+    st.markdown("**Time windows (IST)** — if **both** toggles are off, entries are not limited by the entry clock band and TP / time stop / RSI exits are not limited by the exit clock band (other rules unchanged). **EOD** and **stop loss** still apply when enabled.")
+    tc1, tc2 = st.columns(2)
+    with tc1:
+        use_entry_window_w = st.checkbox(
+            "Use entry time window",
+            value=bool(cfg.use_entry_window),
+            help="When off, new BUY signals may occur at any time (still subject to RSI, caps, trade permission, etc.).",
         )
-        use_otm_distance_filter = st.checkbox(
-            "OTM distance filter",
-            value=bool(getattr(cfg, "use_otm_distance_filter", True)),
-            help="Off = consider all strikes on nearest weekly expiry (nearest strike to spot first).",
+    with tc2:
+        use_exit_window_w = st.checkbox(
+            "Use exit time window",
+            value=bool(cfg.use_exit_window),
+            help="When off, profit target, time stop, and RSI exits may trigger anytime. EOD and stop loss always run when their switches are on.",
         )
-        use_premium_band = st.checkbox(
-            "Premium band (min–max ₹)",
-            value=bool(getattr(cfg, "use_premium_band", True)),
-            help="Off = first option with a usable quote (nearest strike ordering).",
-        )
-    with rt2:
-        use_exit_eod = st.checkbox("Exit: EOD square-off", value=bool(getattr(cfg, "use_exit_eod", True)))
-        use_exit_time_stop = st.checkbox("Exit: time stop", value=bool(getattr(cfg, "use_exit_time_stop", True)))
-        use_exit_profit_target = st.checkbox("Exit: profit target %", value=bool(getattr(cfg, "use_exit_profit_target", True)))
-        use_exit_stop_loss = st.checkbox("Exit: stop loss %", value=bool(getattr(cfg, "use_exit_stop_loss", True)))
-        use_exit_rsi = st.checkbox("Exit: RSI levels", value=bool(getattr(cfg, "use_exit_rsi", True)))
-    st.caption(
-        "Backtest sim honours entry window + exit toggles; it does not replay chain selection — OTM/premium toggles affect **live** contract pick only."
-    )
+    tw1, tw2 = st.columns(2)
+    with tw1:
+        entry_start = st.text_input("Entry window start", value=cfg.entry_window_start)
+        entry_end = st.text_input("Entry window end", value=cfg.entry_window_end)
+    with tw2:
+        exit_start = st.text_input("Exit window start", value=cfg.exit_window_start)
+        exit_end = st.text_input("Exit window end", value=cfg.exit_window_end)
+
     st.divider()
 
     col_a, col_b = st.columns(2)
@@ -189,8 +287,20 @@ with st.form("light_l1_form"):
         rsi_exit_pe_below = st.number_input("Exit PE when RSI below", min_value=1.0, max_value=100.0, value=float(cfg.rsi_exit_pe_below))
         min_premium = st.number_input("Min premium ₹", min_value=5.0, max_value=500.0, value=float(cfg.min_premium))
         max_premium = st.number_input("Max premium ₹", min_value=5.0, max_value=500.0, value=float(cfg.max_premium))
-        otm_min = st.number_input("OTM distance min (points)", min_value=50.0, max_value=1000.0, value=float(cfg.otm_distance_min))
-        otm_max = st.number_input("OTM distance max (points)", min_value=50.0, max_value=1000.0, value=float(cfg.otm_distance_max))
+        st.markdown("**OTM — index points** (OTM side vs spot)")
+        otm_points_min = st.number_input(
+            "Min OTM points",
+            min_value=0.0,
+            max_value=5000.0,
+            value=float(cfg.otm_points_min),
+            help="CE: strike − spot; PE: spot − strike (index points).",
+        )
+        otm_points_max = st.number_input(
+            "Max OTM points",
+            min_value=0.0,
+            max_value=5000.0,
+            value=float(cfg.otm_points_max),
+        )
 
     with col_b:
         profit_target_pct = st.number_input("Profit target % on premium", min_value=5.0, max_value=300.0, value=float(cfg.profit_target_pct))
@@ -199,14 +309,13 @@ with st.form("light_l1_form"):
         eod_squareoff_time = st.text_input("EOD square-off (HH:MM)", value=cfg.eod_squareoff_time)
         max_trades = st.number_input("Max trades / day", min_value=1, max_value=10, value=int(cfg.max_trades_per_day))
         max_cons = st.number_input("Max consecutive losses (halt)", min_value=1, max_value=5, value=int(cfg.max_consecutive_losses))
-        entry_start = st.text_input("Entry window start", value=cfg.entry_window_start)
-        entry_end = st.text_input("Entry window end", value=cfg.entry_window_end)
         lot_size = st.number_input("Lots per trade", min_value=1, max_value=5, value=int(cfg.lot_size))
         mode = st.selectbox("Paper / Live", ["PAPER", "LIVE"], index=0 if cfg.mode == "PAPER" else 1)
 
     submitted = st.form_submit_button("Save configuration")
 
 if submitted:
+    param_apply = {k: bool(st.session_state.get(f"l1_pa_{k}", True)) for k in L1_PARAM_APPLY_KEYS}
     new_cfg = LightNiftyRSIConfig(
         rsi_period=int(rsi_period),
         rsi_buy_ce_below=float(rsi_buy_ce_below),
@@ -215,8 +324,8 @@ if submitted:
         rsi_exit_pe_below=float(rsi_exit_pe_below),
         min_premium=float(min_premium),
         max_premium=float(max_premium),
-        otm_distance_min=float(otm_min),
-        otm_distance_max=float(otm_max),
+        otm_points_min=float(otm_points_min),
+        otm_points_max=float(otm_points_max),
         profit_target_pct=float(profit_target_pct),
         stop_loss_pct=float(stop_loss_pct),
         time_stop_min=int(time_stop_min),
@@ -225,16 +334,20 @@ if submitted:
         max_consecutive_losses=int(max_cons),
         entry_window_start=str(entry_start).strip(),
         entry_window_end=str(entry_end).strip(),
+        exit_window_start=str(exit_start).strip(),
+        exit_window_end=str(exit_end).strip(),
         lot_size=int(lot_size),
         mode=str(mode).upper(),
-        use_entry_window=bool(use_entry_window),
-        use_otm_distance_filter=bool(use_otm_distance_filter),
-        use_premium_band=bool(use_premium_band),
-        use_exit_eod=bool(use_exit_eod),
-        use_exit_time_stop=bool(use_exit_time_stop),
-        use_exit_profit_target=bool(use_exit_profit_target),
-        use_exit_stop_loss=bool(use_exit_stop_loss),
-        use_exit_rsi=bool(use_exit_rsi),
+        use_entry_window=bool(use_entry_window_w),
+        use_exit_window=bool(use_exit_window_w),
+        use_otm_distance_filter=bool(cfg.use_otm_distance_filter),
+        use_premium_band=bool(cfg.use_premium_band),
+        use_exit_eod=bool(cfg.use_exit_eod),
+        use_exit_time_stop=bool(cfg.use_exit_time_stop),
+        use_exit_profit_target=bool(cfg.use_exit_profit_target),
+        use_exit_stop_loss=bool(cfg.use_exit_stop_loss),
+        use_exit_rsi=bool(cfg.use_exit_rsi),
+        param_apply=param_apply,
     )
     any_exit = (
         new_cfg.use_exit_eod
@@ -245,8 +358,8 @@ if submitted:
     )
     if new_cfg.min_premium > new_cfg.max_premium:
         st.error("Min premium cannot exceed max premium.")
-    elif new_cfg.otm_distance_min > new_cfg.otm_distance_max:
-        st.error("OTM min cannot exceed OTM max.")
+    elif new_cfg.otm_points_min > new_cfg.otm_points_max:
+        st.error("OTM points min cannot exceed OTM points max.")
     elif not any_exit:
         st.error("Enable at least one exit rule (EOD, time stop, profit target, stop loss, or RSI).")
     else:
