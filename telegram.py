@@ -231,6 +231,28 @@ def send_token_expired() -> bool:
         return False
 
 
+def send_breeze_token_expired(login_url: str = "") -> bool:
+    """Breeze session expired notification."""
+    try:
+        if not _gated("token_expired"):
+            return False
+        login_line = f"1. Open: {login_url}\n" if login_url else "1. Open ICICI Breeze app login URL\n"
+        msg = (
+            f"🔑 <b>Breeze Session Expired</b>\n\n"
+            f"⚠️ Breeze data source is currently unavailable.\n\n"
+            f"<b>Fix — run:</b>\n"
+            f"{login_line}"
+            f"2. Login and copy <code>apisession=</code> value from redirect URL\n"
+            f"3. Update token on VPS:\n"
+            f"<code>/opt/algotrading/app/venv/bin/python breeze_data.py --token YOUR_TOKEN</code>\n"
+            f"🕐 {_ts()}"
+        )
+        return _send(msg)
+    except Exception:
+        log.error("send_breeze_token_expired error", exc_info=True)
+        return False
+
+
 def send_daily_report(
     total_pnl:    float,
     trade_count:  int,

@@ -61,8 +61,11 @@ def send_token_alert():
         "4. On VPS run:\n"
         "`python breeze_data.py --token YOUR_TOKEN`"
     )
-    tg.send(msg)
-    log.warning("Breeze session expired — Telegram alert sent")
+    ok = tg.send_breeze_token_expired(login_url=login_url)
+    if ok:
+        log.warning("Breeze session expired — Telegram alert sent")
+    else:
+        log.warning("Breeze session expired — Telegram alert failed")
 
 
 def main():
